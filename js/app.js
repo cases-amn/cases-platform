@@ -65,6 +65,8 @@ const DEFAULT_SETTINGS = {
   def_prepared_title: 'مدير شعبة القضايا المالية والاقتصادية', def_prepared_rank: 'عقيد', def_prepared_name: '',
   def_reviewed_title: 'مدير إدارة الأمن الجنائي', def_reviewed_rank: 'عقيد', def_reviewed_name: '',
   def_approved_title: 'مساعد مدير الشرطة لشؤون الأمن', def_approved_rank: 'عميد', def_approved_name: '',
+  cover_to: 'سعادة وكيل إمارة منطقة المدينة المنورة للشؤون الأمنية',
+  def_director_title: 'مدير شرطة منطقة المدينة المنورة', def_director_rank: 'اللواء', def_director_name: '',
   lock_hash: '', lock_salt: '',
 };
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports'];
@@ -380,7 +382,7 @@ function viewCase(c) {
         <button class="btn danger" id="delCase">حذف</button></div>
     </div>
     <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'],
-      ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
+      ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير'], ['sCover', 'خطاب التغطية']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
 
     <div class="card" id="sMain"><h2>البيانات الرئيسية</h2>
       <div class="kv">
@@ -459,6 +461,20 @@ function viewCase(c) {
           <a class="btn" href="#/case/${c.id}/report">تحرير التقرير</a>
           <a class="btn gold" href="#/case/${c.id}/report/print">معاينة وطباعة</a></div>`
       : `<div class="empty">لم يُعدّ التقرير بعد</div><a class="btn" href="#/case/${c.id}/report">إعداد التقرير</a>`}
+    </div>
+
+    <div class="card" id="sCover"><h2>خطاب التغطية</h2>
+      <div class="muted" style="margin-bottom:8px">إلى: ${esc(S().cover_to)}</div>
+      <textarea id="coverText" class="amiri" style="min-height:230px">${esc(c.cover_text || buildCoverText(c))}</textarea>
+      <div class="hint">${c.cover_text ? 'نص معدّل ومحفوظ لهذه القضية.' : 'صيغة مولّدة تلقائيًا من بيانات القضية والأطراف — تتحدّث مع أي تعديل على البيانات ما لم تحفظ تعديلك.'}</div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn gold" id="coverCopy">نسخ المتن</button>
+        <button class="btn ghost" id="coverSave">حفظ التعديل</button>
+        <button class="btn ghost" id="coverRegen">إعادة التوليد</button>
+      </div>
+      <div style="margin-top:14px"><label>التوقيع (للصقه في خانته إن لزم)</label>
+        <div style="line-height:1.9; white-space:pre-wrap" id="coverSig">${esc(coverSignature())}</div>
+        <button class="btn sm ghost" id="coverSigCopy" style="margin-top:6px">نسخ التوقيع</button></div>
     </div>`);
 
   $$('[data-j]').forEach(b => b.onclick = () => { const t = document.getElementById(b.dataset.j); window.scrollTo({ top: t.getBoundingClientRect().top + scrollY - 70, behavior: 'smooth' }); });
@@ -509,6 +525,16 @@ function viewCase(c) {
     DB.attachments = DB.attachments.filter(x => x.id !== a.id);
     await save(); toast('تم حذف المرفق'); route();
   });
+  $('#coverCopy').onclick = () => copyText($('#coverText').value.trim(), 'تم نسخ المتن');
+  $('#coverSigCopy').onclick = () => copyText(coverSignature(), 'تم نسخ التوقيع');
+  $('#coverSave').onclick = async () => {
+    c.cover_text = $('#coverText').value.trim();
+    log('حفظ خطاب التغطية', 'قضية #' + c.id); await save(); toast('تم حفظ نص خطاب التغطية'); route();
+  };
+  $('#coverRegen').onclick = async () => {
+    if (c.cover_text && !confirm('استبدال النص المحفوظ بالصيغة المولّدة من بيانات القضية؟')) return;
+    c.cover_text = ''; await save(); route();
+  };
   $('#attF').onsubmit = async e => {
     e.preventDefault();
     const file = e.target.elements.file.files[0];
@@ -855,6 +881,38 @@ function buildRefText(c, parties) {
   if (c.subject) t += `، والمتضمنة ${c.subject}`;
   return t + '.';
 }
+// ---- خطاب التغطية ----
+function partyLabel(p) {
+  const f = p.gender === 'أنثى';
+  const citizen = !p.nationality || /سعودي/.test(p.nationality);
+  return (citizen ? (f ? 'المواطنة' : 'المواطن') : (f ? 'المقيمة' : 'المقيم')) + '/ ' + p.name;
+}
+function buildCoverText(c) {
+  const ps = DB.parties.filter(p => p.case_id === c.id);
+  const cl = ps.filter(p => p.party_role === 'مدعي'), df = ps.filter(p => p.party_role === 'مدعى عليه');
+  const claim = cl.length ? cl.map(partyLabel).join(' و') : '(      )';
+  const against = df.length
+    ? (df.length > 1 ? 'رجال الأمن/ ' : 'رجل الأمن/ ') + df.map(p => (p.rank_job ? p.rank_job + ' ' : '') + p.name).join(' و')
+    : 'أحد منسوبي شرطة المنطقة';
+  const num = c.order_number || '      ', date = c.order_date ? c.order_date + 'هـ' : '(      )';
+  return 'السلام عليكم ورحمة الله وبركاته،\n\n' +
+    `إشارة إلى خطابكم رقم (${num}) وتاريخ ${date} بشأن دعوى ${claim} على ${against}، ` +
+    'وطلبكم استكمال الإجراءات اللازمة، عليه نفيدكم أنه جرى إكمال اللازم وعمل تقرير تقييم القضية المرفق.\n\n' +
+    'نأمل الاطلاع والإحاطة وإكمال اللازم من قبلكم.';
+}
+function coverSignature() {
+  const s = S();
+  return `${s.def_director_title}\n${(s.def_director_rank || '').replace(/\s*\/\s*$/, '')}/ ${s.def_director_name || '(      )'}`;
+}
+async function copyText(t, msg) {
+  try { await navigator.clipboard.writeText(t); }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  toast(msg);
+}
+
 function buildProcedures(c) {
   return DB.statements.filter(s => s.case_id === c.id)
     .map((s, i) => { const p = byId('parties', s.party_id) || {}; return `${i + 1}. سماع أقوال ${roleWord(p.party_role)} / ${p.name || ''}.`; }).join('\n');
@@ -1039,6 +1097,14 @@ function viewSettings() {
         <div class="field"><label>مكان سماع الأقوال الافتراضي</label><input type="text" name="def_location" value="${esc(s.def_location)}"></div>
         <div class="field"><label>رتبة المحقق (سمع الأقوال)</label><input type="text" name="def_taker_rank" value="${esc(s.def_taker_rank)}"></div>
         <div class="field"><label>اسم المحقق (سمع الأقوال)</label><input type="text" name="def_taker_name" value="${esc(s.def_taker_name)}"></div>
+      </div></div>
+
+    <div class="card"><h2>خطاب التغطية</h2>
+      <div class="grid g2">
+        <div class="field span-all"><label>الموجّه إليه</label><input type="text" name="cover_to" value="${esc(s.cover_to)}"></div>
+        <div class="field span-all"><label>مسمى الموقّع</label><input type="text" name="def_director_title" value="${esc(s.def_director_title)}"></div>
+        <div class="field"><label>الرتبة</label><input type="text" name="def_director_rank" value="${esc(s.def_director_rank)}"></div>
+        <div class="field"><label>الاسم</label><input type="text" name="def_director_name" value="${esc(s.def_director_name)}"></div>
       </div></div>
 
     <div class="card"><h2>الموقّعون الافتراضيون في التقرير</h2>
