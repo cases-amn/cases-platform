@@ -74,11 +74,13 @@ const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'let
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters'];
 let DB = null;
 
+function newUid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2); }
 function shapeDB(d) {
   d = d && typeof d === 'object' ? d : {};
   d.app = 'cases-platform'; d.version = 1;
   d.seq = d.seq || {};
   for (const t of TABLES) { d[t] = Array.isArray(d[t]) ? d[t] : []; d.seq[t] = Math.max(d.seq[t] || 0, ...d[t].map(r => r.id || 0), 0); }
+  for (const c of d.cases) if (!c.uid) c.uid = newUid();
   d.seq.case_no = Math.max(d.seq.case_no || 0, ...d.cases.map(c => /^\d+$/.test(String(c.case_number || '').trim()) ? +c.case_number : 0), 0);
   d.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
   d.log = Array.isArray(d.log) ? d.log : [];
@@ -400,7 +402,7 @@ function viewCaseForm(c) {
     const o = formObj(f);
     if (caseNoTaken(o.case_number, c && c.id) && !confirm(`رقم القضية (${o.case_number}) مستخدم في قضية أخرى. الحفظ بنفس الرقم؟`)) return;
     let rec = c;
-    if (!rec) { rec = { id: nextId('cases'), created_at: nowStr(), final_result: '' }; DB.cases.push(rec); }
+    if (!rec) { rec = { id: nextId('cases'), uid: newUid(), created_at: nowStr(), final_result: '' }; DB.cases.push(rec); }
     Object.assign(rec, o, { updated_at: nowStr() });
     DB.seq.case_no = Math.max(DB.seq.case_no || 0, caseNoOf(rec));
     log(c ? 'تعديل قضية' : 'إنشاء قضية', 'قضية رقم ' + (rec.case_number || rec.id));
@@ -440,20 +442,21 @@ function viewCase(c) {
       ${c.order_text ? `<div style="margin-top:14px"><label>صيغة الخطاب في الأمر</label><div style="line-height:1.9; white-space:pre-wrap">${esc(c.order_text)}</div></div>` : ''}
       ${c.subject ? `<div style="margin-top:14px"><label>الموضوع</label><div style="line-height:1.9; white-space:pre-wrap">${esc(c.subject)}</div></div>` : ''}
       ${c.final_result ? `<div style="margin-top:14px"><label>النتيجة النهائية</label><div><b style="color:var(--green-dark)">${esc(c.final_result)}</b></div></div>` : ''}
+      <div style="margin-top:14px"><button class="btn sm ghost" id="caseBackup">حفظ نسخة من هذه القضية (ملف)</button></div>
     </div>
 
     <div class="card" id="sParties"><h2>أطراف القضية</h2>
       ${parties.length ? `<table class="rt">
-        <tr class="hd"><th>م</th><th>الصفة</th><th>الاسم</th><th>رقم الهوية</th><th>الجنسية</th><th>الجنس</th><th>الجوال</th><th>الرتبة/العمل</th><th></th></tr>
+        <tr class="hd"><th>م</th><th>الصفة</th><th>الاسم</th><th>رقم الهوية</th><th>الجنسية</th><th>الجنس</th><th>الجوال</th><th>المهنة/الرتبة</th><th></th></tr>
         ${parties.map((p, i) => `<tr>
           <td class="nomob">${i + 1}</td>
           <td data-l="الصفة"><span class="badge role">${esc(p.party_role)}</span></td>
-          <td data-l="الاسم"><div><b>${esc(p.name)}</b>${p.unit ? `<br><span class="muted">الجهة: ${esc(p.unit)}</span>` : ''}${p.address ? `<br><span class="muted">${esc(p.address)}</span>` : ''}</div></td>
+          <td data-l="الاسم"><div><b>${esc(p.name)}</b>${p.unit ? `<br><span class="muted">جهة العمل: ${esc(p.unit)}</span>` : ''}${p.marital ? `<br><span class="muted">${esc(p.marital)}</span>` : ''}${p.address ? `<br><span class="muted">${esc(p.address)}</span>` : ''}</div></td>
           <td data-l="رقم الهوية">${esc(p.national_id || '—')}</td>
           <td data-l="الجنسية">${esc(p.nationality || '—')}</td>
           <td data-l="الجنس">${esc(p.gender || '—')}</td>
           <td data-l="الجوال">${esc(p.phone || '—')}</td>
-          <td data-l="الرتبة/العمل">${esc(p.rank_job || '—')}</td>
+          <td data-l="المهنة/الرتبة">${esc(p.rank_job || '—')}</td>
           <td class="actions-cell"><div class="btns">
             <a class="btn sm" href="#/case/${c.id}/statement/new?party=${p.id}">سماع أقوال</a>
             <button class="btn sm ghost" data-pedit="${p.id}">تعديل</button>
@@ -539,6 +542,7 @@ function viewCase(c) {
     log('حذف قضية', 'قضية رقم ' + (c.case_number || c.id));
     await save(); toast('تم حذف القضية'); location.hash = '#/';
   };
+  $('#caseBackup').onclick = () => exportCases([c.id]).catch(e => toast('تعذّر الحفظ: ' + e.message, 'error'));
   $('#addParty').onclick = () => partyModal(c, null);
   $$('[data-pedit]').forEach(b => b.onclick = () => partyModal(c, byId('parties', b.dataset.pedit)));
   $$('[data-pdel]').forEach(b => b.onclick = async () => {
@@ -597,10 +601,28 @@ function viewCase(c) {
   };
 }
 
+// ---- بيانات الأطراف ----
+const POSITIONS = ['قائد', 'مدير', 'رئيس', 'مساعد قائد', 'مساعد مدير', 'آمر', 'مشرف', 'مدير عام'];
+const EDU = ['أمّي', 'ابتدائي', 'متوسط', 'ثانوي', 'دبلوم', 'بكالوريوس', 'ماجستير', 'دكتوراه'];
+const maritalOpts = g => g === 'أنثى' ? ['عزباء', 'متزوجة', 'مطلقة', 'أرملة'] : ['أعزب', 'متزوج', 'مطلق', 'أرمل'];
+/** يفصل «مدير مركز شرطة الخالدية» إلى منصب وجهة (للبيانات المحفوظة قبل فصل الخانتين) */
+function splitHead(h) {
+  h = (h || '').trim();
+  const pos = POSITIONS.slice().sort((x, y) => y.length - x.length).find(x => h.startsWith(x + ' '));
+  return pos ? [pos, h.slice(pos.length + 1).trim()] : ['', h];
+}
+const joinHead = (t, e) => [t, e].map(x => (x || '').trim()).filter(Boolean).join(' ');
+function headOf(p) {
+  if (!p) return ['', ''];
+  if (p.head_title || p.head_entity) return [p.head_title || '', p.head_entity || ''];
+  return p.unit_head ? splitHead(p.unit_head) : ['', ''];
+}
+
 function partyModal(c, p) {
   const v = p || { party_role: 'مدعي', nationality: 'سعودي', gender: 'ذكر' };
   const uniq = k => [...new Set(DB.parties.map(x => x[k]).filter(Boolean))];
-  const units = uniq('unit'), heads = uniq('unit_head');
+  const [ht, he] = headOf(v);
+  const dl = (id, list) => `<datalist id="${id}">${list.map(u => `<option value="${esc(u)}">`).join('')}</datalist>`;
   const m = modal(`<h2>${p ? 'تعديل بيانات ' + esc(p.name) : 'إضافة طرف جديد'}</h2>
     <form id="pf" class="grid g2">
       <div><label>الصفة</label><select name="party_role">${opts(ROLES, v.party_role)}</select></div>
@@ -608,33 +630,57 @@ function partyModal(c, p) {
       <div><label>رقم الهوية</label><input type="text" name="national_id" inputmode="numeric" value="${esc(v.national_id)}"></div>
       <div><label>الجنسية</label><input type="text" name="nationality" value="${esc(v.nationality)}"></div>
       <div><label>الجنس</label><select name="gender">${opts(['ذكر', 'أنثى'], v.gender)}</select></div>
+      <div><label>تاريخ الميلاد</label><input type="text" name="birth_date" value="${esc(v.birth_date)}" placeholder="مثال: 1 / 1 / 1410هـ"></div>
+      <div><label>الحالة الاجتماعية</label><select name="marital" id="maritalSel"></select></div>
+      <div><label>المؤهل العلمي</label><input type="text" name="education" list="eduList" value="${esc(v.education)}"></div>
+      <div><label>المهنة / الرتبة</label><input type="text" name="rank_job" value="${esc(v.rank_job)}" placeholder="مثال: موظف، الرقيب"></div>
+      <div><label>جهة العمل</label><input type="text" name="unit" list="unitList" value="${esc(v.unit)}" placeholder="مثال: القوة الخاصة للمسجد النبوي بالمدينة المنورة"></div>
       <div><label>رقم الجوال</label><input type="tel" name="phone" value="${esc(v.phone)}"></div>
       <div><label>العنوان</label><input type="text" name="address" value="${esc(v.address)}"></div>
-      <div><label>الرتبة/العمل (لرجال الأمن)</label><input type="text" name="rank_job" value="${esc(v.rank_job)}" placeholder="مثال: الرقيب"></div>
-      <div class="span-all grid g2 unitbox" id="unitBox">
-        <div><label>الجهة التي يعمل بها</label><input type="text" name="unit" list="unitList" value="${esc(v.unit)}" placeholder="مثال: القوة الخاصة للمسجد النبوي بالمدينة المنورة"></div>
-        <div><label>الموجّه إليه الخطاب في الجهة</label><input type="text" name="unit_head" list="headList" value="${esc(v.unit_head)}" placeholder="مثال: قائد القوة الخاصة للمسجد النبوي"></div>
-        <div class="hint span-all">تُستخدم في خطاب الاستدعاء أو طلب الإفادة الموجّه لجهة عمله.</div>
-        <datalist id="unitList">${units.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
-        <datalist id="headList">${heads.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
+      <div class="span-all unitbox" id="unitBox">
+        <div class="signer-head" style="margin-bottom:4px">المخاطَب في خطاب جهة عمله</div>
+        <div class="grid g2">
+          <div><label>المنصب</label><input type="text" name="head_title" list="posList" value="${esc(ht)}" placeholder="قائد / مدير / رئيس ..."></div>
+          <div><label>الجهة</label><input type="text" name="head_entity" list="entList" value="${esc(he)}" placeholder="مثال: مركز شرطة الخالدية"></div>
+        </div>
+        <div class="hint" id="headPrev"></div>
       </div>
+      ${dl('eduList', EDU)}${dl('unitList', uniq('unit'))}${dl('posList', POSITIONS)}
+      ${dl('entList', [...new Set(DB.parties.map(x => headOf(x)[1]).filter(Boolean))])}
       <div class="span-all" style="display:flex; gap:10px">
         <button class="btn gold" type="submit" style="flex:1">${p ? 'حفظ التعديل' : 'إضافة الطرف'}</button>
         <button class="btn ghost" type="button" id="pcancel" style="flex:1">إلغاء</button></div>
     </form>`);
   const pf = $('#pf', m);
+  const fillMarital = () => {
+    const cur = pf.marital.value || v.marital || '';
+    const list = maritalOpts(pf.gender.value);
+    // نحافظ على الاختيار عند تغيير الجنس (متزوج ↔ متزوجة)
+    const other = maritalOpts(pf.gender.value === 'أنثى' ? 'ذكر' : 'أنثى');
+    const sel = other.includes(cur) ? list[other.indexOf(cur)] : cur;
+    pf.marital.innerHTML = `<option value="">—</option>` + list.map(x => `<option ${x === sel ? 'selected' : ''}>${x}</option>`).join('') +
+      (sel && !list.includes(sel) ? `<option selected>${esc(sel)}</option>` : '');
+  };
+  pf.gender.onchange = fillMarital; fillMarital();
+  const prev = () => {
+    const h = joinHead(pf.head_title.value, pf.head_entity.value);
+    $('#headPrev', m).textContent = h ? `سيُكتب في الخطاب: سعادة ${h} المحترم` : 'يُستخدم في خطاب الاستدعاء أو طلب الإفادة الموجّه لجهة عمله.';
+  };
+  pf.head_title.oninput = prev; pf.head_entity.oninput = prev; prev();
   const syncUnit = () => $('#unitBox', m).classList.toggle('hide', pf.party_role.value !== 'مدعى عليه');
   pf.party_role.onchange = syncUnit; syncUnit();
-  // عند كتابة جهة سبق استخدامها نقترح نفس الموجّه إليه
+  // جهة عمل سبق استخدامها ← نقترح نفس المخاطَب
   pf.unit.onchange = () => {
-    if (pf.unit_head.value.trim()) return;
-    const prev = DB.parties.find(x => x.unit === pf.unit.value.trim() && x.unit_head);
-    pf.unit_head.value = prev ? prev.unit_head : (pf.unit.value.trim() ? 'قائد ' + pf.unit.value.trim() : '');
+    if (pf.head_entity.value.trim() || pf.head_title.value.trim()) return;
+    const old = DB.parties.find(x => x.unit === pf.unit.value.trim() && joinHead(...headOf(x)));
+    const [t, e] = old ? headOf(old) : ['', pf.unit.value.trim()];
+    pf.head_title.value = t; pf.head_entity.value = e; prev();
   };
   $('#pcancel', m).onclick = () => m.remove();
-  $('#pf', m).onsubmit = async e => {
+  pf.onsubmit = async e => {
     e.preventDefault();
-    const o = formObj(e.target);
+    const o = formObj(pf);
+    o.unit_head = joinHead(o.head_title, o.head_entity);
     if (p) Object.assign(p, o);
     else DB.parties.push(Object.assign({ id: nextId('parties'), case_id: c.id }, o));
     await save(); m.remove(); toast(p ? 'تم تعديل بيانات الطرف' : 'تمت إضافة الطرف'); route();
@@ -791,8 +837,14 @@ function viewStatementForm(c, st, preParty) {
       <div><label>رقم الهوية</label><b>${esc(p.national_id || '—')}</b></div>
       <div><label>الجنسية</label><b>${esc(p.nationality || '—')}</b></div>
       <div><label>الجنس</label><b>${esc(p.gender || '—')}</b></div>
+      <div><label>تاريخ الميلاد</label><b>${esc(p.birth_date || '—')}</b></div>
+      <div><label>الحالة الاجتماعية</label><b>${esc(p.marital || '—')}</b></div>
+      <div><label>المؤهل العلمي</label><b>${esc(p.education || '—')}</b></div>
+      <div><label>المهنة / الرتبة</label><b>${esc(p.rank_job || '—')}</b></div>
+      <div><label>جهة العمل</label><b>${esc(p.unit || '—')}</b></div>
       <div><label>الجوال</label><b>${esc(p.phone || '—')}</b></div>
-      <div class="span-all"><label>العنوان</label><b>${esc(p.address || '—')}</b></div>`;
+      <div class="span-all"><label>العنوان</label><b>${esc(p.address || '—')}</b></div>
+      <div class="span-all hint">لتعديل هذه البيانات: ملف القضية ← الأطراف ← تعديل</div>`;
   };
   // في المحضر الجديد: إذا لم يُعدَّل السؤال الافتراضي، نغيّره حسب صفة الطرف المختار
   let autoQ = st ? null : $('#qa').value;
@@ -937,12 +989,16 @@ function viewStatementPrint(c, st) {
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( محضر سماع أقوال )</span></div>
-    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number)}) وتاريخ ${esc(c.order_date)}هـ، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
+    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
     <table class="pdata">
       <tr class="hd"><th>الاســم</th><th>رقم الهوية</th><th>الجنسية</th><th>الجنس</th></tr>
-      <tr><td>${esc(p.name)}${p.rank_job ? ' (' + esc(p.rank_job) + ')' : ''}</td><td>${esc(p.national_id || '—')}</td><td>${esc(p.nationality || '—')}</td><td>${esc(p.gender || '—')}</td></tr>
-      <tr class="hd"><th>رقم الجوال</th><th colspan="3">العنوان</th></tr>
-      <tr><td>${esc(p.phone || '—')}</td><td colspan="3">${esc(p.address || '—')}</td></tr>
+      <tr><td>${esc(p.name)}</td><td>${esc(p.national_id || '—')}</td><td>${esc(p.nationality || '—')}</td><td>${esc(p.gender || '—')}</td></tr>
+      <tr class="hd"><th>تاريخ الميلاد</th><th>الحالة الاجتماعية</th><th>المؤهل العلمي</th><th>المهنة / الرتبة</th></tr>
+      <tr><td>${esc(p.birth_date || '—')}</td><td>${esc(p.marital || '—')}</td><td>${esc(p.education || '—')}</td><td>${esc(p.rank_job || '—')}</td></tr>
+      <tr class="hd"><th colspan="2">جهة العمل</th><th colspan="2">رقم الجوال</th></tr>
+      <tr><td colspan="2">${esc(p.unit || '—')}</td><td colspan="2">${esc(p.phone || '—')}</td></tr>
+      <tr class="hd"><th colspan="4">العنوان</th></tr>
+      <tr><td colspan="4">${esc(p.address || '—')}</td></tr>
     </table>
     <div class="qa">${esc((st.text || '').trim())}</div>
     <div class="sigrow">
@@ -1027,7 +1083,7 @@ function letterDefaults(c, type, partyId) {
   const l = { type, party_id: p ? p.id : null, req: 'appear', req_detail: '', letter_number: '', letter_date: hijriToday(),
     attachments: '', sender: LETTER_TYPES[type].sender };
   if (type === 'cover') { l.to = S().cover_to; l.body = buildCoverText(c); }
-  else if (type === 'unit') { l.to = p ? (p.unit_head || (p.unit ? 'قائد ' + p.unit : '')) : ''; l.body = buildUnitText(c, p, l.req, ''); }
+  else if (type === 'unit') { [l.to_title, l.to_entity] = headOf(p); l.to = joinHead(l.to_title, l.to_entity); l.body = buildUnitText(c, p, l.req, ''); }
   else { l.to = ''; l.body = 'السلام عليكم ورحمة الله وبركاته،\n\n'; }
   return l;
 }
@@ -1051,7 +1107,12 @@ function viewLetterForm(c, lt, newType, partyId) {
         <div class="field"><label>نوع الطلب</label><select name="req">${Object.entries(LETTER_REQS).map(([k, t]) => `<option value="${k}" ${k === v.req ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <div class="field"><label id="detailLbl">تفاصيل الطلب</label><input type="text" name="req_detail" value="${esc(v.req_detail)}"></div>
       </div>` : ''}
-      <div class="field"><label>الموجّه إليه</label><input type="text" name="to" value="${esc(v.to)}" placeholder="مثال: قائد القوة الخاصة للمسجد النبوي"></div>
+      ${type === 'unit' ? `<div class="grid g2">
+        <div class="field"><label>المنصب</label><input type="text" name="to_title" list="posList" value="${esc(v.to_title != null ? v.to_title : splitHead(v.to)[0])}" placeholder="قائد / مدير / رئيس ..."></div>
+        <div class="field"><label>الجهة</label><input type="text" name="to_entity" value="${esc(v.to_entity != null ? v.to_entity : splitHead(v.to)[1])}" placeholder="مثال: مركز شرطة الخالدية"></div>
+        <datalist id="posList">${POSITIONS.map(x => `<option value="${x}">`).join('')}</datalist>
+        <div class="hint span-all" id="toPrev"></div></div>`
+      : `<div class="field"><label>الموجّه إليه</label><input type="text" name="to" value="${esc(v.to)}"></div>`}
       <div class="grid g3" style="margin-top:14px">
         <div class="field"><label>الرقم</label><input type="text" name="letter_number" value="${esc(v.letter_number)}"></div>
         ${dateField('letter_date', 'التاريخ (هـ)', v.letter_date)}
@@ -1073,8 +1134,10 @@ function viewLetterForm(c, lt, newType, partyId) {
   const f = $('#f'), body = $('#body');
   bindToday(f);
   let autoBody = letterBody(c, Object.assign({}, v)) === v.body ? v.body : null;
-  let autoTo = v.to;
-  const cur = () => Object.assign({}, v, formObj(f), { party_id: f.party_id ? +f.party_id.value : null });
+  let autoTo = type === 'unit' ? joinHead(v.to_title != null ? v.to_title : splitHead(v.to)[0], v.to_entity != null ? v.to_entity : splitHead(v.to)[1]) : v.to;
+  const cur = () => { const o = Object.assign({}, v, formObj(f), { party_id: f.party_id ? +f.party_id.value : null });
+    if (type === 'unit') o.to = joinHead(o.to_title, o.to_entity);
+    return o; };
   const refresh = () => {
     const l = cur();
     if (f.req) {
@@ -1085,10 +1148,14 @@ function viewLetterForm(c, lt, newType, partyId) {
   };
   if (f.party_id) f.party_id.onchange = () => {
     const p = byId('parties', f.party_id.value);
-    if (f.to.value === autoTo) { autoTo = p ? (p.unit_head || (p.unit ? 'قائد ' + p.unit : '')) : ''; f.to.value = autoTo; }
+    if (joinHead(f.to_title.value, f.to_entity.value) === autoTo) {
+      [f.to_title.value, f.to_entity.value] = headOf(p); autoTo = joinHead(f.to_title.value, f.to_entity.value);
+    }
     refresh();
   };
   if (f.req) { f.req.onchange = refresh; f.req_detail.oninput = refresh; }
+  const toPrev = () => { const t = cur().to; $('#toPrev').textContent = t ? `سيُكتب في الخطاب: سعادة ${t} المحترم` : ''; };
+  if (f.to_title) { f.to_title.oninput = toPrev; f.to_entity.oninput = toPrev; const op = f.party_id.onchange; f.party_id.onchange = () => { op(); toPrev(); }; toPrev(); }
   refresh();
   $('#regen').onclick = () => {
     if (body.value.trim() && body.value !== autoBody && !confirm('استبدال المتن الحالي بالصيغة المولّدة؟')) return;
@@ -1223,30 +1290,119 @@ function viewStats() {
 }
 
 // ========================= الإعدادات =========================
-async function exportBackup() {
+// ---- النسخ الاحتياطي: كامل، أو قضية واحدة، أو قضايا مختارة ----
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+async function filesToData(paths) {
   const files = {};
-  for (const p of await Store.backend.listFiles()) {
-    const b = await Store.backend.getFile(p);
-    if (b) files[p] = await blobToDataURL(b);
-  }
+  for (const p of paths) { const b = await Store.backend.getFile(p); if (b) files[p] = await blobToDataURL(b); }
+  return files;
+}
+async function exportBackup() {
+  const files = await filesToData(await Store.backend.listFiles());
   const out = { app: 'cases-platform', kind: 'backup', exported_at: nowStr(), db: DB, files };
-  const d = new Date();
-  download(new Blob([JSON.stringify(out)], { type: 'application/json' }), `نسخة-احتياطية-القضايا-${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}.json`);
+  download(new Blob([JSON.stringify(out)], { type: 'application/json' }), `نسخة-كاملة-القضايا-${today()}.json`);
+  log('تصدير نسخة كاملة', `${DB.cases.length} قضية`); save();
+}
+/** نسخة تضم قضايا محددة فقط مع أطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها */
+async function exportCases(ids) {
+  ids = new Set(ids.map(Number));
+  const db = { cases: DB.cases.filter(c => ids.has(c.id)) };
+  for (const t of CASE_CHILDREN) db[t] = DB[t].filter(r => ids.has(r.case_id));
+  const paths = new Set();
+  db.statements.forEach(st => { if (st.signature_path) paths.add(st.signature_path); if (st.taker_sig_path) paths.add(st.taker_sig_path); });
+  db.attachments.forEach(a => paths.add(a.filename));
+  const out = { app: 'cases-platform', kind: 'cases', exported_at: nowStr(), db, files: await filesToData([...paths]) };
+  const one = db.cases.length === 1;
+  download(new Blob([JSON.stringify(out)], { type: 'application/json' }),
+    one ? `قضية-${safeName(String(db.cases[0].case_number || db.cases[0].id))}-${today()}.json` : `قضايا-مختارة-${db.cases.length}-${today()}.json`);
+  log('تصدير قضايا', one ? 'قضية رقم ' + (db.cases[0].case_number || db.cases[0].id) : `${db.cases.length} قضية`); save();
+  toast(one ? 'تم حفظ نسخة القضية' : `تم حفظ نسخة من ${db.cases.length} قضية`);
+}
+function exportPicker() {
+  const rows = DB.cases.slice().sort((a, b) => b.id - a.id);
+  const label = c => `${c.case_number || c.id} — ${(DB.parties.find(p => p.case_id === c.id) || {}).name || c.subject || ''}`.slice(0, 80);
+  const m = modal(`<h2>تصدير قضايا محددة</h2>
+    <input type="search" id="pkQ" placeholder="بحث برقم القضية أو الاسم..." style="margin-bottom:10px">
+    <label class="sigmode"><input type="checkbox" id="pkAll"><span><b>تحديد الكل</b></span></label>
+    <div id="pkList" style="max-height:50vh; overflow:auto; display:flex; flex-direction:column; gap:6px; margin-top:6px">
+      ${rows.map(c => `<label class="sigmode" data-t="${esc(label(c))}"><input type="checkbox" value="${c.id}"><span>${esc(label(c))}</span></label>`).join('')}
+    </div>
+    <div style="display:flex; gap:10px; margin-top:14px">
+      <button class="btn gold" id="pkGo" style="flex:1" disabled>تصدير (0)</button>
+      <button class="btn ghost" id="pkX" style="flex:1">إلغاء</button></div>`);
+  const boxes = () => $$('#pkList input', m), chosen = () => boxes().filter(b => b.checked).map(b => b.value);
+  const upd = () => { const n = chosen().length; $('#pkGo', m).disabled = !n; $('#pkGo', m).textContent = `تصدير (${n})`; };
+  boxes().forEach(b => b.onchange = upd);
+  $('#pkAll', m).onchange = e => { boxes().forEach(b => { if (b.closest('label').style.display !== 'none') b.checked = e.target.checked; }); upd(); };
+  $('#pkQ', m).oninput = e => $$('#pkList label', m).forEach(l => { l.style.display = l.dataset.t.includes(e.target.value.trim()) ? '' : 'none'; });
+  $('#pkX', m).onclick = () => m.remove();
+  $('#pkGo', m).onclick = async () => { const ids = chosen(); m.remove(); try { await exportCases(ids); } catch (e) { toast('تعذّر التصدير: ' + e.message, 'error'); } };
+}
+
+/** دمج قضايا من نسخة: القضية الموجودة (بنفس المعرّف الثابت) تُحدَّث، والجديدة تُضاف بأرقام داخلية جديدة */
+function mergeCases(src) {
+  const map = Object.fromEntries(TABLES.map(t => [t, {}]));
+  let added = 0, updated = 0;
+  for (const c of src.cases || []) {
+    const ex = c.uid && DB.cases.find(x => x.uid === c.uid);
+    if (ex) {
+      const id = ex.id;
+      for (const t of CASE_CHILDREN) DB[t] = DB[t].filter(r => r.case_id !== id);
+      for (const k of Object.keys(ex)) delete ex[k];
+      Object.assign(ex, c, { id });
+      map.cases[c.id] = id; updated++;
+    } else {
+      const id = nextId('cases');
+      DB.cases.push(Object.assign({}, c, { id, uid: c.uid || newUid() }));
+      map.cases[c.id] = id; added++;
+    }
+  }
+  const remap = (t, extra) => (src[t] || []).forEach(r => {
+    const cid = map.cases[r.case_id];
+    if (!cid) return;
+    const n = Object.assign({}, r, { id: nextId(t), case_id: cid }, extra ? extra(r) : {});
+    map[t][r.id] = n.id;
+    DB[t].push(n);
+  });
+  remap('parties');
+  remap('statements', r => ({ party_id: map.parties[r.party_id] || null }));
+  remap('attachments'); remap('reports');
+  remap('letters', r => ({ party_id: r.party_id ? (map.parties[r.party_id] || null) : null }));
+  DB.seq.case_no = Math.max(DB.seq.case_no || 0, ...DB.cases.map(caseNoOf), 0);
+  return { added, updated };
 }
 async function importBackup(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch (e) { return toast('الملف ليس نسخة احتياطية صالحة', 'error'); }
   if (!data || data.app !== 'cases-platform' || !data.db) return toast('الملف ليس نسخة احتياطية من هذه المنصة', 'error');
-  const n = (data.db.cases || []).length;
-  if (!confirm(`سيتم استبدال جميع البيانات الحالية (${DB.cases.length} قضية) ببيانات النسخة (${n} قضية). متابعة؟`)) return;
-  toast('جارٍ الاستيراد...');
-  for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u));
-  urlCache.clear();
-  DB = shapeDB(data.db);
-  log('استيراد نسخة احتياطية', `${n} قضية`);
-  await save();
-  toast('تم استيراد النسخة الاحتياطية');
-  route();
+  const src = data.db, n = (src.cases || []).length;
+  const same = (src.cases || []).filter(c => c.uid && DB.cases.some(x => x.uid === c.uid)).length;
+  const full = data.kind !== 'cases';
+  const m = modal(`<h2>استيراد نسخة</h2>
+    <div style="line-height:1.9">${full ? 'نسخة كاملة' : 'نسخة قضايا'} بتاريخ ${esc(data.exported_at || '—')} — تضم <b>${n}</b> قضية.
+      ${same ? `<br>منها <b>${same}</b> موجودة لديك وستُستبدل بنسختها في الملف.` : ''}</div>
+    <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px">
+      <button class="btn gold" id="imMerge">إضافة القضايا إلى بياناتي الحالية${same ? ' وتحديث الموجود' : ''}</button>
+      ${full ? `<button class="btn danger" id="imReplace">استبدال كل بياناتي بهذه النسخة (تُحذف ${DB.cases.length} قضية حالية)</button>` : ''}
+      <button class="btn ghost" id="imX">إلغاء</button></div>`);
+  $('#imX', m).onclick = () => m.remove();
+  const putAll = async () => { for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u)); urlCache.clear(); };
+  $('#imMerge', m).onclick = async () => {
+    m.remove(); toast('جارٍ الاستيراد...');
+    await putAll();
+    const r = mergeCases(src);
+    log('استيراد قضايا', `إضافة ${r.added}، تحديث ${r.updated}`); await save();
+    toast(`تم: إضافة ${r.added} قضية${r.updated ? `، وتحديث ${r.updated}` : ''}`); route();
+  };
+  const rp = $('#imReplace', m);
+  if (rp) rp.onclick = async () => {
+    if (!confirm('تأكيد: حذف كل البيانات الحالية واستبدالها بالنسخة؟')) return;
+    m.remove(); toast('جارٍ الاستيراد...');
+    await putAll();
+    DB = shapeDB(src);
+    log('استيراد نسخة كاملة (استبدال)', `${n} قضية`); await save();
+    toast('تم استيراد النسخة الاحتياطية'); route();
+  };
 }
 /** نقل كل البيانات والملفات إلى مكان حفظ جديد */
 async function moveTo(target) {
@@ -1287,10 +1443,11 @@ function viewSettings() {
       </div>
       <h2 style="margin-top:20px">النسخ الاحتياطي</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
-        <button class="btn" id="bkExport">تصدير نسخة احتياطية</button>
-        <label class="btn ghost" style="margin:0">استيراد نسخة احتياطية<input type="file" id="bkImport" accept=".json,application/json" hidden></label>
+        <button class="btn" id="bkExport">نسخة كاملة (كل القضايا)</button>
+        <button class="btn ghost" id="bkPick">نسخة لقضايا محددة</button>
+        <label class="btn ghost" style="margin:0">استيراد نسخة<input type="file" id="bkImport" accept=".json,application/json,text/plain" hidden></label>
       </div>
-      <div class="hint">النسخة ملف واحد يضم القضايا والتواقيع والمرفقات — استخدمه لنقل البيانات بين الجوال والكمبيوتر.</div>
+      <div class="hint">النسخة ملف واحد يُحفظ في «التنزيلات» على جهازك، ويضم القضايا بأطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها. «النسخة الكاملة» تضم الإعدادات أيضًا. عند الاستيراد تختار: إضافة القضايا إلى بياناتك (والقضية الموجودة تُحدَّث)، أو استبدال كل البيانات. ولحفظ قضية واحدة: افتح ملفها واضغط «حفظ نسخة من هذه القضية».</div>
     </div>
 
     <form id="f">
@@ -1390,6 +1547,7 @@ function viewSettings() {
     log('حذف توقيع المحقق'); await save(); route();
   };
   $('#bkExport').onclick = () => exportBackup().catch(e => toast('تعذّر التصدير: ' + e.message, 'error'));
+  $('#bkPick').onclick = () => DB.cases.length ? exportPicker() : toast('لا توجد قضايا', 'error');
   $('#bkImport').onchange = e => { const fl = e.target.files[0]; if (fl) importBackup(fl).catch(err => toast('تعذّر الاستيراد: ' + err.message, 'error')); };
   const mf = $('#mvFolder');
   if (mf) mf.onclick = async () => {
