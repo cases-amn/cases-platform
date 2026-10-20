@@ -77,6 +77,7 @@ function shapeDB(d) {
   d.app = 'cases-platform'; d.version = 1;
   d.seq = d.seq || {};
   for (const t of TABLES) { d[t] = Array.isArray(d[t]) ? d[t] : []; d.seq[t] = Math.max(d.seq[t] || 0, ...d[t].map(r => r.id || 0), 0); }
+  d.seq.case_no = Math.max(d.seq.case_no || 0, ...d.cases.map(c => /^\d+$/.test(String(c.case_number || '').trim()) ? +c.case_number : 0), 0);
   d.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
   d.log = Array.isArray(d.log) ? d.log : [];
   return d;
@@ -303,7 +304,7 @@ function viewDashboard() {
       <tr class="hd"><th>م</th><th>رقم القضية</th><th>مصدر الأمر</th><th>رقم الأمر وتاريخه</th><th>الموضوع</th><th>المحقق المكلف</th><th>الأطراف</th><th>المحاضر</th><th>الحالة</th></tr>
       ${rows.map((c, i) => { const n = caseStats(c); return `<tr class="clickable" data-go="#/case/${c.id}">
         <td class="nomob">${i + 1}</td>
-        <td data-l="رقم القضية"><b>${esc(c.case_number || '—')}</b>${c.case_year ? ' / ' + esc(c.case_year) + 'هـ' : ''}</td>
+        <td data-l="رقم القضية"><b>${esc(c.case_number || '—')}</b></td>
         <td data-l="مصدر الأمر">${esc(c.order_source || '—')}</td>
         <td data-l="رقم الأمر">${esc(c.order_number || '—')}${c.order_date ? `<br><span class="muted">${esc(c.order_date)}هـ</span>` : ''}</td>
         <td data-l="الموضوع" style="max-width:280px">${esc((c.subject || '').slice(0, 70))}${(c.subject || '').length > 70 ? '…' : ''}</td>
@@ -319,16 +320,21 @@ function viewDashboard() {
 }
 
 // ========================= بيانات القضية =========================
+// ترقيم القضايا: عدّاد لا يرجع للخلف، فرقم القضية المحذوفة لا يُعاد استخدامه
+const caseNoOf = c => /^\d+$/.test(String(c.case_number || '').trim()) ? +String(c.case_number).trim() : 0;
+function nextCaseNo() { return Math.max(DB.seq.case_no || 0, ...DB.cases.map(caseNoOf), 0) + 1; }
+const caseNoTaken = (no, exceptId) => !!no && DB.cases.some(x => x.id !== exceptId && String(x.case_number || '').trim() === no);
+
 function viewCaseForm(c) {
-  const v = c || { order_source: S().def_order_source, status: 'جارية', assigned_name: S().def_taker_name };
+  const v = c || { case_number: String(nextCaseNo()), order_source: S().def_order_source, status: 'جارية', assigned_name: S().def_taker_name };
   const names = [...new Set(DB.cases.map(x => x.assigned_name).concat(S().def_taker_name).filter(Boolean))];
   shell(`
     <div class="page-head"><h1>${c ? 'تعديل بيانات القضية' : 'قضية <span>جديدة</span>'}</h1></div>
     <form id="f">
     <div class="card"><h2>البيانات الرئيسية للقضية</h2>
-      <div class="grid g3">
-        <div class="field"><label>رقم القضية (داخلي)</label><input type="text" name="case_number" inputmode="numeric" value="${esc(v.case_number)}" placeholder="مثال: 15"></div>
-        <div class="field"><label>السنة (هـ)</label><input type="text" name="case_year" inputmode="numeric" value="${esc(v.case_year)}" placeholder="1447"></div>
+      <div class="grid g2">
+        <div class="field"><label>رقم القضية (داخلي)</label><input type="text" name="case_number" id="caseNo" inputmode="numeric" value="${esc(v.case_number)}">
+          <div class="hint" id="caseNoHint">${c ? 'يمكن تعديله عند الحاجة' : 'رقم تلقائي — يمكن تعديله عند الحاجة'}</div></div>
         <div class="field"><label>الحالة</label><select name="status">${opts(STATUSES, v.status)}</select></div>
       </div>
       <div class="grid g3" style="margin-top:14px">
@@ -352,12 +358,21 @@ function viewCaseForm(c) {
     </form>`, c ? '' : 'new');
   const f = $('#f');
   bindToday(f);
+  const no = $('#caseNo'), hint = $('#caseNoHint'), hint0 = hint.textContent;
+  const checkNo = () => {
+    const dup = caseNoTaken(no.value.trim(), c && c.id);
+    hint.textContent = dup ? '⚠ هذا الرقم مستخدم في قضية أخرى' : hint0;
+    hint.style.color = dup ? 'var(--red)' : '';
+  };
+  no.oninput = checkNo; checkNo();
   f.onsubmit = async e => {
     e.preventDefault();
     const o = formObj(f);
+    if (caseNoTaken(o.case_number, c && c.id) && !confirm(`رقم القضية (${o.case_number}) مستخدم في قضية أخرى. الحفظ بنفس الرقم؟`)) return;
     let rec = c;
     if (!rec) { rec = { id: nextId('cases'), created_at: nowStr(), final_result: '' }; DB.cases.push(rec); }
     Object.assign(rec, o, { updated_at: nowStr() });
+    DB.seq.case_no = Math.max(DB.seq.case_no || 0, caseNoOf(rec));
     log(c ? 'تعديل قضية' : 'إنشاء قضية', 'قضية رقم ' + (rec.case_number || rec.id));
     await save();
     toast(c ? 'تم حفظ التعديلات' : 'تم إنشاء القضية');
@@ -375,7 +390,7 @@ function viewCase(c) {
   const pRole = id => (byId('parties', id) || {}).party_role || '';
   shell(`
     <div class="page-head">
-      <h1>ملف القضية <span>رقم ${esc(c.case_number || c.id)}${c.case_year ? ' / ' + esc(c.case_year) + 'هـ' : ''}</span>
+      <h1>ملف القضية <span>رقم ${esc(c.case_number || c.id)}</span>
         <span class="badge st-${esc(c.status)}">${esc(c.status)}</span></h1>
       <div class="acts"><a class="btn" href="#/case/${c.id}/report">تقرير تقييم الإجراءات</a>
         <a class="btn ghost" href="#/case/${c.id}/edit">تعديل البيانات</a>
@@ -848,7 +863,7 @@ function viewReportPrint(c) {
 function viewStatementPrint(c, st) {
   const p = byId('parties', st.party_id) || {};
   const html = `<div class="sheet flow" id="sheet" style="--fs:14.5pt">
-    ${printHead([['القضية رقم :', esc(c.case_number) + (c.case_year ? ' / ' + esc(c.case_year) + 'هـ' : '')],
+    ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( محضر سماع أقوال )</span></div>
     <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number)}) وتاريخ ${esc(c.order_date)}هـ، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
