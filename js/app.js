@@ -67,9 +67,11 @@ const DEFAULT_SETTINGS = {
   def_approved_title: 'مساعد مدير الشرطة لشؤون الأمن', def_approved_rank: 'عميد', def_approved_name: '',
   cover_to: 'سعادة وكيل إمارة منطقة المدينة المنورة للشؤون الأمنية',
   def_director_title: 'مدير شرطة منطقة المدينة المنورة', def_director_rank: 'اللواء', def_director_name: '',
+  sender_assist_title: 'مساعد مدير الشرطة لشؤون الأمن', sender_assist_rank: 'عميد', sender_assist_name: '',
   lock_hash: '', lock_salt: '',
 };
-const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports'];
+const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters'];
+const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters'];
 let DB = null;
 
 function shapeDB(d) {
@@ -80,6 +82,12 @@ function shapeDB(d) {
   d.seq.case_no = Math.max(d.seq.case_no || 0, ...d.cases.map(c => /^\d+$/.test(String(c.case_number || '').trim()) ? +c.case_number : 0), 0);
   d.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
   d.log = Array.isArray(d.log) ? d.log : [];
+  // نص خطاب التغطية المحفوظ في القضية (الإصدار السابق) يصبح خطابًا في قائمة الخطابات
+  for (const c of d.cases) if (c.cover_text) {
+    d.letters.push({ id: ++d.seq.letters, case_id: c.id, type: 'cover', to: d.settings.cover_to, body: c.cover_text,
+      sender: 'director', letter_number: '', letter_date: '', attachments: '', created_at: c.updated_at || '' });
+    delete c.cover_text;
+  }
   return d;
 }
 const S = () => DB.settings;
@@ -230,9 +238,30 @@ function route() {
       const st = DB.statements.find(s => s.id === +sid && s.case_id === cs.id);
       if (st) return c === 'print' ? viewStatementPrint(cs, st) : viewStatementForm(cs, st);
     }
+    if (b === 'letter') {
+      if (sid === 'new') return viewLetterForm(cs, null, q.get('type'), q.get('party'));
+      const lt = DB.letters.find(l => l.id === +sid && l.case_id === cs.id);
+      if (lt) return c === 'print' ? viewLetterPrint(cs, lt) : viewLetterForm(cs, lt);
+    }
   }
   location.hash = '#/';
 }
+
+// ---- راحة الكتابة على الجوال ----
+// مربعات النص تكبر مع المحتوى (بدل التمرير داخلها، الذي يصعّب تحريك المؤشر باللمس)
+function autoGrow(ta) {
+  if (!ta || ta.tagName !== 'TEXTAREA' || !ta.offsetParent) return;
+  const y = window.scrollY;
+  ta.style.height = 'auto';
+  ta.style.height = (ta.scrollHeight + 2) + 'px';
+  window.scrollTo(0, y);
+}
+function setVal(el, v) { el.value = v; autoGrow(el); }
+document.addEventListener('input', e => autoGrow(e.target));
+// أثناء الكتابة نخفي الشريط السفلي ونفكّ تثبيت زر الحفظ حتى تبقى مساحة النص ظاهرة فوق لوحة المفاتيح
+const isTypingEl = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(checkbox|radio|file|button|submit)$/.test(el.type)));
+document.addEventListener('focusin', e => { if (isTypingEl(e.target)) document.body.classList.add('typing'); });
+document.addEventListener('focusout', () => setTimeout(() => { if (!isTypingEl(document.activeElement)) document.body.classList.remove('typing'); }, 60));
 
 function shell(content, active) {
   document.body.className = '';
@@ -253,6 +282,7 @@ function shell(content, active) {
   const l = $('#lockNow');
   if (l) l.onclick = () => { sessionStorage.removeItem('unlocked'); screenLock(); };
   hydrateImages();
+  setTimeout(() => $$('textarea').forEach(autoGrow), 0);
 }
 
 function modal(html) {
@@ -386,6 +416,7 @@ function viewCase(c) {
   const sts = DB.statements.filter(s => s.case_id === c.id);
   const atts = DB.attachments.filter(a => a.case_id === c.id);
   const rep = DB.reports.find(r => r.case_id === c.id);
+  const letters = DB.letters.filter(l => l.case_id === c.id);
   const pName = id => (byId('parties', id) || {}).name || '—';
   const pRole = id => (byId('parties', id) || {}).party_role || '';
   shell(`
@@ -397,7 +428,7 @@ function viewCase(c) {
         <button class="btn danger" id="delCase">حذف</button></div>
     </div>
     <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'],
-      ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير'], ['sCover', 'خطاب التغطية']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
+      ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير'], ['sLetters', 'الخطابات (' + letters.length + ')']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
 
     <div class="card" id="sMain"><h2>البيانات الرئيسية</h2>
       <div class="kv">
@@ -417,7 +448,7 @@ function viewCase(c) {
         ${parties.map((p, i) => `<tr>
           <td class="nomob">${i + 1}</td>
           <td data-l="الصفة"><span class="badge role">${esc(p.party_role)}</span></td>
-          <td data-l="الاسم"><div><b>${esc(p.name)}</b>${p.address ? `<br><span class="muted">${esc(p.address)}</span>` : ''}</div></td>
+          <td data-l="الاسم"><div><b>${esc(p.name)}</b>${p.unit ? `<br><span class="muted">الجهة: ${esc(p.unit)}</span>` : ''}${p.address ? `<br><span class="muted">${esc(p.address)}</span>` : ''}</div></td>
           <td data-l="رقم الهوية">${esc(p.national_id || '—')}</td>
           <td data-l="الجنسية">${esc(p.nationality || '—')}</td>
           <td data-l="الجنس">${esc(p.gender || '—')}</td>
@@ -478,18 +509,23 @@ function viewCase(c) {
       : `<div class="empty">لم يُعدّ التقرير بعد</div><a class="btn" href="#/case/${c.id}/report">إعداد التقرير</a>`}
     </div>
 
-    <div class="card" id="sCover"><h2>خطاب التغطية</h2>
-      <div class="muted" style="margin-bottom:8px">إلى: ${esc(S().cover_to)}</div>
-      <textarea id="coverText" class="amiri" style="min-height:230px">${esc(c.cover_text || buildCoverText(c))}</textarea>
-      <div class="hint">${c.cover_text ? 'نص معدّل ومحفوظ لهذه القضية.' : 'صيغة مولّدة تلقائيًا من بيانات القضية والأطراف — تتحدّث مع أي تعديل على البيانات ما لم تحفظ تعديلك.'}</div>
-      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
-        <button class="btn gold" id="coverCopy">نسخ المتن</button>
-        <button class="btn ghost" id="coverSave">حفظ التعديل</button>
-        <button class="btn ghost" id="coverRegen">إعادة التوليد</button>
+    <div class="card" id="sLetters"><h2>الخطابات</h2>
+      ${letters.length ? `<table class="rt">
+        <tr class="hd"><th>م</th><th>الخطاب</th><th>الموجّه إليه</th><th>التاريخ</th><th></th></tr>
+        ${letters.map((l, i) => `<tr>
+          <td class="nomob">${i + 1}</td>
+          <td data-l="الخطاب"><b>${esc(LETTER_TYPES[l.type] ? LETTER_TYPES[l.type].label : 'خطاب')}</b></td>
+          <td data-l="إلى">${esc(l.to || '—')}</td>
+          <td data-l="التاريخ">${esc(l.letter_date || '—')}</td>
+          <td class="actions-cell"><div class="btns">
+            <button class="btn sm" data-lcopy="${l.id}">نسخ المتن</button>
+            <a class="btn sm ghost" href="#/case/${c.id}/letter/${l.id}">فتح</a>
+            <a class="btn sm ghost" href="#/case/${c.id}/letter/${l.id}/print">طباعة</a>
+            <button class="btn sm danger" data-ldel="${l.id}">حذف</button></div></td></tr>`).join('')}
+      </table>` : '<div class="empty">لا توجد خطابات بعد — اختر نوع الخطاب أدناه</div>'}
+      <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap">
+        ${Object.entries(LETTER_TYPES).map(([k, t]) => `<a class="btn ghost" href="#/case/${c.id}/letter/new?type=${k}">+ ${t.label}</a>`).join('')}
       </div>
-      <div style="margin-top:14px"><label>التوقيع (للصقه في خانته إن لزم)</label>
-        <div style="line-height:1.9; white-space:pre-wrap" id="coverSig">${esc(coverSignature())}</div>
-        <button class="btn sm ghost" id="coverSigCopy" style="margin-top:6px">نسخ التوقيع</button></div>
     </div>`);
 
   $$('[data-j]').forEach(b => b.onclick = () => { const t = document.getElementById(b.dataset.j); window.scrollTo({ top: t.getBoundingClientRect().top + scrollY - 70, behavior: 'smooth' }); });
@@ -498,7 +534,7 @@ function viewCase(c) {
     for (const s of sts) await delFile(s.signature_path);
     for (const a of atts) await delFile(a.filename);
     DB.cases = DB.cases.filter(x => x.id !== c.id);
-    for (const t of ['parties', 'statements', 'attachments', 'reports']) DB[t] = DB[t].filter(x => x.case_id !== c.id);
+    for (const t of CASE_CHILDREN) DB[t] = DB[t].filter(x => x.case_id !== c.id);
     for (const s of sts) await delFileIfUnused(s.taker_sig_path);
     log('حذف قضية', 'قضية رقم ' + (c.case_number || c.id));
     await save(); toast('تم حذف القضية'); location.hash = '#/';
@@ -540,16 +576,12 @@ function viewCase(c) {
     DB.attachments = DB.attachments.filter(x => x.id !== a.id);
     await save(); toast('تم حذف المرفق'); route();
   });
-  $('#coverCopy').onclick = () => copyText($('#coverText').value.trim(), 'تم نسخ المتن');
-  $('#coverSigCopy').onclick = () => copyText(coverSignature(), 'تم نسخ التوقيع');
-  $('#coverSave').onclick = async () => {
-    c.cover_text = $('#coverText').value.trim();
-    log('حفظ خطاب التغطية', 'قضية #' + c.id); await save(); toast('تم حفظ نص خطاب التغطية'); route();
-  };
-  $('#coverRegen').onclick = async () => {
-    if (c.cover_text && !confirm('استبدال النص المحفوظ بالصيغة المولّدة من بيانات القضية؟')) return;
-    c.cover_text = ''; await save(); route();
-  };
+  $$('[data-lcopy]').forEach(b => b.onclick = () => copyText(byId('letters', b.dataset.lcopy).body.trim(), 'تم نسخ متن الخطاب'));
+  $$('[data-ldel]').forEach(b => b.onclick = async () => {
+    if (!confirm('حذف الخطاب؟')) return;
+    DB.letters = DB.letters.filter(x => x.id !== +b.dataset.ldel);
+    log('حذف خطاب', 'قضية #' + c.id); await save(); toast('تم حذف الخطاب'); route();
+  });
   $('#attF').onsubmit = async e => {
     e.preventDefault();
     const file = e.target.elements.file.files[0];
@@ -567,6 +599,8 @@ function viewCase(c) {
 
 function partyModal(c, p) {
   const v = p || { party_role: 'مدعي', nationality: 'سعودي', gender: 'ذكر' };
+  const uniq = k => [...new Set(DB.parties.map(x => x[k]).filter(Boolean))];
+  const units = uniq('unit'), heads = uniq('unit_head');
   const m = modal(`<h2>${p ? 'تعديل بيانات ' + esc(p.name) : 'إضافة طرف جديد'}</h2>
     <form id="pf" class="grid g2">
       <div><label>الصفة</label><select name="party_role">${opts(ROLES, v.party_role)}</select></div>
@@ -577,10 +611,26 @@ function partyModal(c, p) {
       <div><label>رقم الجوال</label><input type="tel" name="phone" value="${esc(v.phone)}"></div>
       <div><label>العنوان</label><input type="text" name="address" value="${esc(v.address)}"></div>
       <div><label>الرتبة/العمل (لرجال الأمن)</label><input type="text" name="rank_job" value="${esc(v.rank_job)}" placeholder="مثال: الرقيب"></div>
+      <div class="span-all grid g2 unitbox" id="unitBox">
+        <div><label>الجهة التي يعمل بها</label><input type="text" name="unit" list="unitList" value="${esc(v.unit)}" placeholder="مثال: القوة الخاصة للمسجد النبوي بالمدينة المنورة"></div>
+        <div><label>الموجّه إليه الخطاب في الجهة</label><input type="text" name="unit_head" list="headList" value="${esc(v.unit_head)}" placeholder="مثال: قائد القوة الخاصة للمسجد النبوي"></div>
+        <div class="hint span-all">تُستخدم في خطاب الاستدعاء أو طلب الإفادة الموجّه لجهة عمله.</div>
+        <datalist id="unitList">${units.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
+        <datalist id="headList">${heads.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
+      </div>
       <div class="span-all" style="display:flex; gap:10px">
         <button class="btn gold" type="submit" style="flex:1">${p ? 'حفظ التعديل' : 'إضافة الطرف'}</button>
         <button class="btn ghost" type="button" id="pcancel" style="flex:1">إلغاء</button></div>
     </form>`);
+  const pf = $('#pf', m);
+  const syncUnit = () => $('#unitBox', m).classList.toggle('hide', pf.party_role.value !== 'مدعى عليه');
+  pf.party_role.onchange = syncUnit; syncUnit();
+  // عند كتابة جهة سبق استخدامها نقترح نفس الموجّه إليه
+  pf.unit.onchange = () => {
+    if (pf.unit_head.value.trim()) return;
+    const prev = DB.parties.find(x => x.unit === pf.unit.value.trim() && x.unit_head);
+    pf.unit_head.value = prev ? prev.unit_head : (pf.unit.value.trim() ? 'قائد ' + pf.unit.value.trim() : '');
+  };
   $('#pcancel', m).onclick = () => m.remove();
   $('#pf', m).onsubmit = async e => {
     e.preventDefault();
@@ -648,6 +698,21 @@ async function delFileIfUnused(path) {
   if (!used) await delFile(path);
 }
 
+/** السؤال الأول الافتراضي في المحضر حسب صفة الطرف (بياناته الشخصية مطبوعة أصلًا في المحضر) */
+function defaultQuestion(c, p) {
+  const role = p && p.party_role;
+  if (role === 'مدعي') return 'س / ما هي دعواك بالتفصيل؟\nج / ';
+  if (role === 'مدعى عليه') {
+    const cl = DB.parties.filter(x => x.case_id === c.id && x.party_role === 'مدعي');
+    const fem = cl.length === 1 && cl[0].gender === 'أنثى';
+    const who = cl.length ? cl.map(x => (x.gender === 'أنثى' ? 'المدعوة/ ' : 'المدعو/ ') + x.name).join(' و') : 'المدعو/ (      )';
+    const that = cl.length > 1 ? 'بأنهم' : (fem ? 'بأنها' : 'بأنه');
+    return `س / وردنا خطاب ${c.order_source || 'سعادة وكيل إمارة منطقة المدينة المنورة'} رقم (${c.order_number || '      '}) ` +
+      `وتاريخ ${c.order_date ? c.order_date + 'هـ' : '(      )'}، بشأن دعوى ${fem ? 'تقدّمت' : 'تقدّم'} بها ${who} ${that} ${c.subject || '(      )'}، فما هي أقوالك؟\nج / `;
+  }
+  return 'س / ما هي أقوالك ومعلوماتك حول الموضوع؟\nج / ';
+}
+
 function viewStatementForm(c, st, preParty) {
   const parties = DB.parties.filter(p => p.case_id === c.id);
   if (!parties.length) {
@@ -659,7 +724,7 @@ function viewStatementForm(c, st, preParty) {
   const pre = +(preParty || (st && st.party_id) || parties[0].id);
   const v = st || { statement_date: hijriToday(), location: S().def_location,
     taker_rank: S().def_taker_rank, taker_name: S().def_taker_name || c.assigned_name || '',
-    text: 'س / ما اسمك الكامل وجنسيتك ورقم هويتك ومحل إقامتك ورقم جوالك؟\nج / \n\nس / \nج / ' };
+    text: defaultQuestion(c, byId('parties', pre)) };
   const takerMode = st && st.taker_sig_path ? 'keep' : (st ? 'none' : (S().taker_sig ? 'saved' : 'new'));
   shell(`
     <div class="page-head"><h1>محضر <span>سماع أقوال</span> — قضية رقم ${esc(c.case_number || c.id)}</h1></div>
@@ -729,13 +794,19 @@ function viewStatementForm(c, st, preParty) {
       <div><label>الجوال</label><b>${esc(p.phone || '—')}</b></div>
       <div class="span-all"><label>العنوان</label><b>${esc(p.address || '—')}</b></div>`;
   };
-  sel.onchange = showParty; showParty();
+  // في المحضر الجديد: إذا لم يُعدَّل السؤال الافتراضي، نغيّره حسب صفة الطرف المختار
+  let autoQ = st ? null : $('#qa').value;
+  sel.onchange = () => {
+    showParty();
+    if (autoQ !== null && $('#qa').value === autoQ) { autoQ = defaultQuestion(c, byId('parties', sel.value)); setVal($('#qa'), autoQ); }
+  };
+  showParty();
   const qa = $('#qa');
   $$('[data-ins]').forEach(b => b.onclick = () => {
     const t = b.dataset.ins.replace(/\\n/g, '\n');
     const s = qa.selectionEnd ?? qa.value.length;
     qa.value = qa.value.slice(0, s) + t + qa.value.slice(s);
-    qa.focus(); qa.selectionStart = qa.selectionEnd = s + t.length;
+    autoGrow(qa); qa.focus(); qa.selectionStart = qa.selectionEnd = s + t.length;
   });
 
   const pad = mountSig($('#sigParty'));
@@ -915,10 +986,6 @@ function buildCoverText(c) {
     'وطلبكم استكمال الإجراءات اللازمة، عليه نفيدكم أنه جرى إكمال اللازم وعمل تقرير تقييم القضية المرفق.\n\n' +
     'نأمل الاطلاع والإحاطة وإكمال اللازم من قبلكم.';
 }
-function coverSignature() {
-  const s = S();
-  return `${s.def_director_title}\n${(s.def_director_rank || '').replace(/\s*\/\s*$/, '')}/ ${s.def_director_name || '(      )'}`;
-}
 async function copyText(t, msg) {
   try { await navigator.clipboard.writeText(t); }
   catch (e) {
@@ -926,6 +993,139 @@ async function copyText(t, msg) {
     document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
   }
   toast(msg);
+}
+
+// ========================= الخطابات =========================
+const LETTER_TYPES = {
+  unit: { label: 'خطاب لجهة المدعى عليه', sender: 'assist' },
+  cover: { label: 'خطاب تغطية لوكيل الإمارة', sender: 'director' },
+  blank: { label: 'خطاب فارغ', sender: 'assist' },
+};
+const LETTER_REQS = { appear: 'إبلاغه بالمراجعة', inform: 'إفادتنا عن', custom: 'نص آخر' };
+function senders() {
+  const s = S();
+  return {
+    assist: { title: s.sender_assist_title, rank: s.sender_assist_rank, name: s.sender_assist_name },
+    director: { title: s.def_director_title, rank: s.def_director_rank, name: s.def_director_name },
+  };
+}
+const caseDefendants = c => DB.parties.filter(p => p.case_id === c.id && p.party_role === 'مدعى عليه');
+function buildUnitText(c, p, req, detail) {
+  const cl = DB.parties.filter(x => x.case_id === c.id && x.party_role === 'مدعي');
+  const claim = cl.length ? cl.map(partyLabel).join(' و') : '(      )';
+  const who = p ? (p.rank_job ? `${p.rank_job.replace(/\s*\/\s*$/, '')}/ ${p.name}` : p.name) : '(      )';
+  const d = (detail || '').trim();
+  const ask = req === 'inform' ? `إفادتنا عن ${d || '(      )'}` : req === 'custom' ? (d || '(      )') : `إبلاغه بالمراجعة${d ? ' ' + d : ''}`;
+  return 'السلام عليكم ورحمة الله وبركاته،\n\n' +
+    `إشارة إلى خطاب ${c.order_source || 'سعادة وكيل إمارة منطقة المدينة المنورة'} رقم (${c.order_number || '      '}) ` +
+    `وتاريخ ${c.order_date ? c.order_date + 'هـ' : '(      )'}، بشأن دعوى ${claim} على أحد منسوبيكم ${who}، ` +
+    `وذلك بسبب ${c.subject || '(      )'}.\n\n` +
+    `عليه نود منكم ${ask}.`;
+}
+function letterDefaults(c, type, partyId) {
+  const p = byId('parties', partyId) || caseDefendants(c)[0] || null;
+  const l = { type, party_id: p ? p.id : null, req: 'appear', req_detail: '', letter_number: '', letter_date: hijriToday(),
+    attachments: '', sender: LETTER_TYPES[type].sender };
+  if (type === 'cover') { l.to = S().cover_to; l.body = buildCoverText(c); }
+  else if (type === 'unit') { l.to = p ? (p.unit_head || (p.unit ? 'قائد ' + p.unit : '')) : ''; l.body = buildUnitText(c, p, l.req, ''); }
+  else { l.to = ''; l.body = 'السلام عليكم ورحمة الله وبركاته،\n\n'; }
+  return l;
+}
+function letterBody(c, l) {
+  return l.type === 'cover' ? buildCoverText(c) : l.type === 'unit' ? buildUnitText(c, byId('parties', l.party_id), l.req, l.req_detail) : 'السلام عليكم ورحمة الله وبركاته،\n\n';
+}
+
+function viewLetterForm(c, lt, newType, partyId) {
+  if (!lt && !LETTER_TYPES[newType]) { location.hash = '#/case/' + c.id; return; }
+  const v = lt || letterDefaults(c, newType, partyId);
+  const type = v.type, defs = caseDefendants(c), snd = senders();
+  shell(`
+    <div class="page-head"><h1>${esc(LETTER_TYPES[type].label)} <span>— قضية رقم ${esc(c.case_number || c.id)}</span></h1>
+      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
+    <form id="f">
+    <div class="card"><h2>بيانات الخطاب</h2>
+      ${type === 'unit' ? `<div class="grid g3" style="margin-bottom:14px">
+        <div class="field"><label>المدعى عليه</label><select name="party_id">${defs.length
+          ? defs.map(p => `<option value="${p.id}" ${p.id === +v.party_id ? 'selected' : ''}>${esc((p.rank_job ? p.rank_job + ' / ' : '') + p.name)}</option>`).join('')
+          : '<option value="">— لا يوجد مدعى عليه في القضية —</option>'}</select></div>
+        <div class="field"><label>نوع الطلب</label><select name="req">${Object.entries(LETTER_REQS).map(([k, t]) => `<option value="${k}" ${k === v.req ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+        <div class="field"><label id="detailLbl">تفاصيل الطلب</label><input type="text" name="req_detail" value="${esc(v.req_detail)}"></div>
+      </div>` : ''}
+      <div class="field"><label>الموجّه إليه</label><input type="text" name="to" value="${esc(v.to)}" placeholder="مثال: قائد القوة الخاصة للمسجد النبوي"></div>
+      <div class="grid g3" style="margin-top:14px">
+        <div class="field"><label>الرقم</label><input type="text" name="letter_number" value="${esc(v.letter_number)}"></div>
+        ${dateField('letter_date', 'التاريخ (هـ)', v.letter_date)}
+        <div class="field"><label>المشفوعات</label><input type="text" name="attachments" value="${esc(v.attachments)}"></div>
+      </div>
+    </div>
+    <div class="card"><h2>المتن <button type="button" class="btn sm ghost count" id="regen">إعادة التوليد</button></h2>
+      <textarea name="body" id="body" class="amiri" style="min-height:220px">${esc(v.body)}</textarea>
+      <div class="hint">يُولَّد من بيانات القضية والأطراف ويتحدّث مع اختياراتك أعلاه ما لم تعدّله يدويًا. «نسخ المتن» ينسخ هذا النص فقط.</div>
+    </div>
+    <div class="card"><h2>المرسل</h2>
+      <div class="sigmodes">${Object.entries(snd).map(([k, x]) => `<label class="sigmode"><input type="radio" name="sender" value="${k}" ${k === v.sender ? 'checked' : ''}>
+        <span><b>${esc(x.title)}</b><br><span class="muted">${esc(x.rank)}/ ${esc(x.name || '(      ) — يُضبط الاسم من الإعدادات')}</span></span></label>`).join('')}</div>
+    </div>
+    <div class="formbar"><button class="btn gold" type="submit">حفظ</button>
+      <button class="btn" type="button" id="copyBody">نسخ المتن</button>
+      <button class="btn ghost" type="submit" data-print="1">حفظ ثم طباعة</button></div>
+    </form>`);
+  const f = $('#f'), body = $('#body');
+  bindToday(f);
+  let autoBody = letterBody(c, Object.assign({}, v)) === v.body ? v.body : null;
+  let autoTo = v.to;
+  const cur = () => Object.assign({}, v, formObj(f), { party_id: f.party_id ? +f.party_id.value : null });
+  const refresh = () => {
+    const l = cur();
+    if (f.req) {
+      $('#detailLbl').textContent = l.req === 'inform' ? 'إفادتنا عن' : l.req === 'custom' ? 'نص الطلب' : 'تفاصيل المراجعة (اختياري)';
+      f.req_detail.placeholder = l.req === 'appear' ? 'مثال: لدى شؤون الأمن بشرطة المنطقة' : '';
+    }
+    if (type !== 'blank' && autoBody !== null && body.value === autoBody) { autoBody = letterBody(c, l); setVal(body, autoBody); }
+  };
+  if (f.party_id) f.party_id.onchange = () => {
+    const p = byId('parties', f.party_id.value);
+    if (f.to.value === autoTo) { autoTo = p ? (p.unit_head || (p.unit ? 'قائد ' + p.unit : '')) : ''; f.to.value = autoTo; }
+    refresh();
+  };
+  if (f.req) { f.req.onchange = refresh; f.req_detail.oninput = refresh; }
+  refresh();
+  $('#regen').onclick = () => {
+    if (body.value.trim() && body.value !== autoBody && !confirm('استبدال المتن الحالي بالصيغة المولّدة؟')) return;
+    autoBody = letterBody(c, cur()); setVal(body, autoBody);
+  };
+  $('#copyBody').onclick = () => copyText(body.value.trim(), 'تم نسخ المتن');
+  let wantPrint = false;
+  $('[data-print]', f).onclick = () => { wantPrint = true; };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const o = cur();
+    o.body = body.value;
+    let rec = lt;
+    if (!rec) { rec = { id: nextId('letters'), case_id: c.id, created_at: nowStr() }; DB.letters.push(rec); }
+    Object.assign(rec, o, { updated_at: nowStr() });
+    log(lt ? 'تعديل خطاب' : 'إنشاء خطاب', LETTER_TYPES[type].label + ' — قضية #' + c.id);
+    await save(); toast('تم حفظ الخطاب');
+    location.hash = wantPrint ? `#/case/${c.id}/letter/${rec.id}/print` : `#/case/${c.id}`;
+  };
+}
+
+function viewLetterPrint(c, l) {
+  const x = senders()[l.sender] || senders().assist;
+  const to = (l.to || '').trim();
+  const toLine = !to ? '(      )' : /^(سعادة|معالي|صاحب|فضيلة)/.test(to) ? to : 'سعادة ' + to;
+  const html = `<div class="sheet one" id="sheet"><div class="inner">
+    ${printHead([['الرقــم :', esc(l.letter_number)], ['التاريخ :', esc(l.letter_date) + (l.letter_date ? 'هـ' : '')], ['المشفوعات :', esc(l.attachments)]])}
+    <div class="lt-to"><span>${esc(toLine)}</span><span>المحترم</span></div>
+    <div class="lt-body">${esc((l.body || '').trim())}</div>
+    <div class="lt-sig"><div class="t">${esc(x.title)}</div>${rankName(x.rank, x.name)}</div>
+  </div></div>`;
+  const pv = printShell(html, ['#/case/' + c.id + '/letter/' + l.id, 'تعديل الخطاب'], '@page { size: A4 portrait; margin: 0; }');
+  pv.ready.then(() => {
+    const res = fitOnePage($('#sheet'), 16, 10);
+    $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
+    pv.scaler();
+  });
 }
 
 function buildProcedures(c) {
@@ -1114,13 +1314,19 @@ function viewSettings() {
         <div class="field"><label>اسم المحقق (سمع الأقوال)</label><input type="text" name="def_taker_name" value="${esc(s.def_taker_name)}"></div>
       </div></div>
 
-    <div class="card"><h2>خطاب التغطية</h2>
-      <div class="grid g2">
-        <div class="field span-all"><label>الموجّه إليه</label><input type="text" name="cover_to" value="${esc(s.cover_to)}"></div>
-        <div class="field span-all"><label>مسمى الموقّع</label><input type="text" name="def_director_title" value="${esc(s.def_director_title)}"></div>
-        <div class="field"><label>الرتبة</label><input type="text" name="def_director_rank" value="${esc(s.def_director_rank)}"></div>
-        <div class="field"><label>الاسم</label><input type="text" name="def_director_name" value="${esc(s.def_director_name)}"></div>
-      </div></div>
+    <div class="card"><h2>الخطابات</h2>
+      <div class="field"><label>الموجّه إليه خطاب التغطية</label><input type="text" name="cover_to" value="${esc(s.cover_to)}"></div>
+      <div class="grid g2" style="margin-top:14px">
+        <div><div class="signer-head">المرسل الأول</div>
+          <div class="field"><label>المسمى</label><input type="text" name="sender_assist_title" value="${esc(s.sender_assist_title)}"></div>
+          <div class="field"><label>الرتبة</label><input type="text" name="sender_assist_rank" value="${esc(s.sender_assist_rank)}"></div>
+          <div class="field"><label>الاسم</label><input type="text" name="sender_assist_name" value="${esc(s.sender_assist_name)}"></div></div>
+        <div><div class="signer-head">المرسل الثاني</div>
+          <div class="field"><label>المسمى</label><input type="text" name="def_director_title" value="${esc(s.def_director_title)}"></div>
+          <div class="field"><label>الرتبة</label><input type="text" name="def_director_rank" value="${esc(s.def_director_rank)}"></div>
+          <div class="field"><label>الاسم</label><input type="text" name="def_director_name" value="${esc(s.def_director_name)}"></div></div>
+      </div>
+      <div class="hint">يُختار المرسل في كل خطاب، ويظهر توقيعه أسفل الخطاب المطبوع.</div></div>
 
     <div class="card"><h2>الموقّعون الافتراضيون في التقرير</h2>
       <div class="grid g3">${signer('prepared', 'معد التقرير')}${signer('reviewed', 'راجعه')}${signer('approved', 'أجازه')}</div></div>

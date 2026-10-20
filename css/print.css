@@ -71,3 +71,9 @@ table.pdata tr:hover td { background: none; }
   .sheet.flow { width: auto; min-height: 0; padding: 0; }
   .sheet .head { break-inside: avoid; }
 }
+
+/* الخطابات */
+.lt-to { display: flex; justify-content: space-between; font-weight: 700; margin: 1.1em 0 .7em; gap: 6mm; }
+.lt-body { line-height: 1.85; text-align: justify; white-space: pre-wrap; }
+.lt-sig { width: 88mm; margin-inline-start: auto; text-align: center; margin-top: 1.6em; line-height: 1.6; }
+.lt-sig .t { font-weight: 700; }

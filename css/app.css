@@ -265,6 +265,12 @@ tr.clickable { cursor: pointer; }
   table.rt td.nomob { display: none; }
   .card.flush { padding: 10px; background: transparent; border: 0; }
 
+  /* أثناء الكتابة: لا شريط سفلي ولا زر حفظ مثبّت فوق لوحة المفاتيح */
+  body.typing { padding-bottom: 0; }
+  body.typing .bottomnav { display: none; }
+  body.typing .formbar { position: static; background: none; }
+  textarea { overflow-y: hidden; resize: none; }
+
   .modal-bg { align-items: flex-end; padding: 0; }
   .modal { border-radius: 18px 18px 0 0; max-height: 92vh; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
   .toast { bottom: calc(var(--navh) + 80px); }
