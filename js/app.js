@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS = {
   logo_file: '',
   def_order_source: 'سعادة وكيل إمارة منطقة المدينة المنورة للشؤون الأمنية',
   def_location: 'شؤون الأمن بشرطة منطقة المدينة المنورة',
-  def_taker_rank: '', def_taker_name: '',
+  def_taker_rank: '', def_taker_name: '', taker_sig: '',
   def_prepared_title: 'مدير شعبة القضايا المالية والاقتصادية', def_prepared_rank: 'عقيد', def_prepared_name: '',
   def_reviewed_title: 'مدير إدارة الأمن الجنائي', def_reviewed_rank: 'عقيد', def_reviewed_name: '',
   def_approved_title: 'مساعد مدير الشرطة لشؤون الأمن', def_approved_rank: 'عميد', def_approved_name: '',
@@ -468,6 +468,7 @@ function viewCase(c) {
     for (const a of atts) await delFile(a.filename);
     DB.cases = DB.cases.filter(x => x.id !== c.id);
     for (const t of ['parties', 'statements', 'attachments', 'reports']) DB[t] = DB[t].filter(x => x.case_id !== c.id);
+    for (const s of sts) await delFileIfUnused(s.taker_sig_path);
     log('حذف قضية', 'قضية رقم ' + (c.case_number || c.id));
     await save(); toast('تم حذف القضية'); location.hash = '#/';
   };
@@ -476,8 +477,10 @@ function viewCase(c) {
   $$('[data-pdel]').forEach(b => b.onclick = async () => {
     const p = byId('parties', b.dataset.pdel);
     if (!confirm(`حذف الطرف «${p.name}» ومحاضره؟`)) return;
-    for (const s of DB.statements.filter(s => s.party_id === p.id)) await delFile(s.signature_path);
+    const gone = DB.statements.filter(s => s.party_id === p.id);
+    for (const s of gone) await delFile(s.signature_path);
     DB.statements = DB.statements.filter(s => s.party_id !== p.id);
+    for (const s of gone) await delFileIfUnused(s.taker_sig_path);
     DB.parties = DB.parties.filter(x => x.id !== p.id);
     await save(); toast('تم حذف الطرف'); route();
   });
@@ -486,6 +489,7 @@ function viewCase(c) {
     const s = byId('statements', b.dataset.sdel);
     await delFile(s.signature_path);
     DB.statements = DB.statements.filter(x => x.id !== s.id);
+    await delFileIfUnused(s.taker_sig_path);
     log('حذف محضر', 'قضية #' + c.id);
     await save(); toast('تم حذف المحضر'); route();
   });
@@ -570,6 +574,38 @@ function bindSigTools(root, pad, extra) {
   });
   sync();
 }
+function sigPadHTML(id) {
+  return `<div class="sighost" id="${id}"><div class="sigwrap"><canvas class="sigpad"></canvas><div class="sigline"></div></div>
+    <div class="sigtools-slot">${sigToolsHTML(false)}</div></div>`;
+}
+/** يركّب لوحة توقيع داخل عنصر أنشأه sigPadHTML، مع وضع ملء الشاشة */
+function mountSig(host) {
+  const wrap = $('.sigwrap', host), slot = $('.sigtools-slot', host);
+  const pad = new SignaturePad($('canvas', wrap));
+  onLeave(() => pad.destroy());
+  // ملء الشاشة: ننقل نفس اللوحة إلى طبقة كاملة ثم نعيدها
+  const goFull = () => {
+    const ov = document.createElement('div');
+    ov.className = 'sigfull';
+    ov.innerHTML = `<div class="hint" style="color:#cfe3d8">وقّع داخل المربع الأبيض</div>`;
+    ov.appendChild(wrap);
+    const tools = document.createElement('div'); tools.innerHTML = sigToolsHTML(true);
+    ov.appendChild(tools);
+    document.body.appendChild(ov);
+    pad.fit();
+    bindSigTools(ov, pad, a => { if (a === 'done') { host.insertBefore(wrap, slot); ov.remove(); pad.fit(); bindSigTools(slot, pad); } });
+    try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+  };
+  bindSigTools(slot, pad, a => { if (a === 'full') goFull(); });
+  return pad;
+}
+/** يحذف ملف التوقيع فقط إذا لم يعد أي سجل أو إعداد يستخدمه */
+async function delFileIfUnused(path) {
+  if (!path) return;
+  const used = S().taker_sig === path || S().logo_file === path ||
+    DB.statements.some(s => s.signature_path === path || s.taker_sig_path === path);
+  if (!used) await delFile(path);
+}
 
 function viewStatementForm(c, st, preParty) {
   const parties = DB.parties.filter(p => p.case_id === c.id);
@@ -583,6 +619,7 @@ function viewStatementForm(c, st, preParty) {
   const v = st || { statement_date: hijriToday(), location: S().def_location,
     taker_rank: S().def_taker_rank, taker_name: S().def_taker_name || c.assigned_name || '',
     text: 'س / ما اسمك الكامل وجنسيتك ورقم هويتك ومحل إقامتك ورقم جوالك؟\nج / \n\nس / \nج / ' };
+  const takerMode = st && st.taker_sig_path ? 'keep' : (st ? 'none' : (S().taker_sig ? 'saved' : 'new'));
   shell(`
     <div class="page-head"><h1>محضر <span>سماع أقوال</span> — قضية رقم ${esc(c.case_number || c.id)}</h1></div>
     <form id="f">
@@ -615,9 +652,25 @@ function viewStatementForm(c, st, preParty) {
         <div style="margin-top:6px"><label style="display:inline-flex; gap:6px; align-items:center; font-weight:400">
           <input type="checkbox" name="remove_sig" value="1"> حذف التوقيع المحفوظ</label></div>
         <div class="hint">أي توقيع جديد أدناه سيستبدل التوقيع المحفوظ</div></div>` : ''}
-      <div id="sigHost"><div class="sigwrap"><canvas id="sig" class="sigpad"></canvas><div class="sigline"></div></div></div>
-      <div id="sigTools">${sigToolsHTML(false)}</div>
+      ${sigPadHTML('sigParty')}
       <div class="hint">وقّع بالإصبع أو القلم أو الفأرة. يمكن تغيير لون الحبر وسماكة القلم، و«ملء الشاشة» أريح على الجوال (أدر الجوال أفقيًا).</div>
+    </div>
+
+    <div class="card"><h2>توقيع من سمع الأقوال ودوّنها (المحقق)</h2>
+      <div class="sigmodes">
+        ${st && st.taker_sig_path ? `<label class="sigmode"><input type="radio" name="taker_mode" value="keep" ${takerMode === 'keep' ? 'checked' : ''}>
+          <span>التوقيع الحالي لهذا المحضر</span><img class="sig-img" data-file="${esc(st.taker_sig_path)}" alt=""></label>` : ''}
+        ${S().taker_sig ? `<label class="sigmode"><input type="radio" name="taker_mode" value="saved" ${takerMode === 'saved' ? 'checked' : ''}>
+          <span>توقيعي المحفوظ</span><img class="sig-img" data-file="${esc(S().taker_sig)}" alt=""></label>` : ''}
+        <label class="sigmode"><input type="radio" name="taker_mode" value="new" ${takerMode === 'new' ? 'checked' : ''}><span>توقيع جديد</span></label>
+        <label class="sigmode"><input type="radio" name="taker_mode" value="none" ${takerMode === 'none' ? 'checked' : ''}><span>بدون توقيع</span></label>
+      </div>
+      <div id="takerNew" class="${takerMode === 'new' ? '' : 'hide'}" style="margin-top:12px">
+        ${sigPadHTML('sigTaker')}
+        <label class="sigmode" style="margin-top:10px"><input type="checkbox" name="taker_save_default" value="1" ${S().taker_sig ? '' : 'checked'}>
+          <span>احفظه كتوقيعي الافتراضي ليُدرج تلقائيًا في المحاضر القادمة</span></label>
+      </div>
+      <div class="hint">يمكن أيضًا حفظ توقيع المحقق مرة واحدة من «الإعدادات».</div>
     </div>
 
     <div class="formbar"><button class="btn gold" type="submit">حفظ المحضر</button>
@@ -644,23 +697,13 @@ function viewStatementForm(c, st, preParty) {
     qa.focus(); qa.selectionStart = qa.selectionEnd = s + t.length;
   });
 
-  const pad = new SignaturePad($('#sig'));
-  onLeave(() => pad.destroy());
-  // ملء الشاشة: ننقل نفس اللوحة إلى طبقة كاملة ثم نعيدها
-  const host = $('#sigHost'), wrap = $('.sigwrap', host);
-  const goFull = () => {
-    const ov = document.createElement('div');
-    ov.className = 'sigfull';
-    ov.innerHTML = `<div class="hint" style="color:#cfe3d8">وقّع داخل المربع الأبيض</div>`;
-    ov.appendChild(wrap);
-    const tools = document.createElement('div'); tools.innerHTML = sigToolsHTML(true);
-    ov.appendChild(tools);
-    document.body.appendChild(ov);
-    pad.fit();
-    bindSigTools(ov, pad, a => { if (a === 'done') { host.appendChild(wrap); ov.remove(); pad.fit(); bindSigTools($('#sigTools'), pad); } });
-    try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
-  };
-  bindSigTools($('#sigTools'), pad, a => { if (a === 'full') goFull(); });
+  const pad = mountSig($('#sigParty'));
+  const tpad = mountSig($('#sigTaker'));
+  $$('[name=taker_mode]', f).forEach(r => r.onchange = () => {
+    const isNew = $('[name=taker_mode]:checked', f).value === 'new';
+    $('#takerNew').classList.toggle('hide', !isNew);
+    if (isNew) tpad.fit();   // اللوحة كانت مخفية فلم يُحسب مقاسها
+  });
 
   f.onsubmit = async e => {
     e.preventDefault();
@@ -677,6 +720,20 @@ function viewStatementForm(c, st, preParty) {
         rec.signature_path = path;
         if (oldSig) await delFile(oldSig);
       } else if (o.remove_sig && oldSig) { await delFile(oldSig); rec.signature_path = ''; }
+      // توقيع المحقق
+      const oldTaker = rec.taker_sig_path || '';
+      if (o.taker_mode === 'saved') rec.taker_sig_path = S().taker_sig;
+      else if (o.taker_mode === 'none') rec.taker_sig_path = '';
+      else if (o.taker_mode === 'new') {
+        const tb = await tpad.toBlob();
+        if (tb) {
+          const path = `signatures/taker_${Date.now()}.png`;
+          await putFile(path, tb);
+          rec.taker_sig_path = path;
+          if (o.taker_save_default) { const prev = S().taker_sig; S().taker_sig = path; await delFileIfUnused(prev); }
+        } else rec.taker_sig_path = '';
+      }
+      if (oldTaker !== rec.taker_sig_path) await delFileIfUnused(oldTaker);
       Object.assign(rec, { party_id: +o.party_id, statement_date: o.statement_date, location: o.location,
         taker_rank: o.taker_rank, taker_name: o.taker_name, text: f.text.value });
       log(st ? 'تعديل سماع أقوال' : 'إضافة سماع أقوال', 'قضية #' + c.id);
@@ -780,7 +837,8 @@ function viewStatementPrint(c, st) {
       <div class="sigbox"><div class="role">المستمع لأقواله</div><div>الاسم / ${esc(p.name)}</div><div>التوقيع /</div>
         ${st.signature_path ? `<img class="sigimg" data-file="${esc(st.signature_path)}" alt="">` : ''}</div>
       <div class="sigbox"><div class="role">سمع الأقوال ودوّنها</div>
-        <div>${esc(st.taker_rank)}${st.taker_rank ? ' / ' : ''}${esc(st.taker_name)}</div><div>التوقيع /</div></div>
+        <div>${esc(st.taker_rank)}${st.taker_rank ? ' / ' : ''}${esc(st.taker_name)}</div><div>التوقيع /</div>
+        ${st.taker_sig_path ? `<img class="sigimg" data-file="${esc(st.taker_sig_path)}" alt="">` : ''}</div>
     </div></div>`;
   const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 11mm 14mm; }', 'مقاس A4');
   pv.ready.then(pv.scaler);
@@ -989,6 +1047,15 @@ function viewSettings() {
     <div class="formbar"><button class="btn gold" type="submit">حفظ الإعدادات</button></div>
     </form>
 
+    <div class="card" id="takerSigCard"><h2>توقيع المحقق (من سمع الأقوال ودوّنها)</h2>
+      ${s.taker_sig ? `<div style="margin-bottom:12px"><label>التوقيع المحفوظ حاليًا</label>
+        <img class="sig-img" data-file="${esc(s.taker_sig)}" alt="">
+        <div style="margin-top:8px"><button type="button" class="btn sm danger" id="takerSigDel">حذف التوقيع المحفوظ</button></div></div>` : ''}
+      <label>${s.taker_sig ? 'استبداله بتوقيع جديد' : 'وقّع هنا مرة واحدة'}</label>
+      ${sigPadHTML('sigDefault')}
+      <div style="margin-top:12px"><button type="button" class="btn gold" id="takerSigSave">حفظ التوقيع</button></div>
+      <div class="hint">يُدرج هذا التوقيع تلقائيًا تحت «سمع الأقوال ودوّنها» في كل محضر جديد، ويمكن تغييره لأي محضر من صفحة المحضر. المحاضر السابقة تحتفظ بتوقيعها.</div></div>
+
     <div class="card"><h2>رمز الدخول</h2>
       <form id="pinF" class="grid g3" style="align-items:end">
         <div><label>${s.lock_hash ? 'رمز جديد' : 'رمز الدخول'}</label><input type="password" name="pin" inputmode="numeric" autocomplete="new-password" minlength="4"></div>
@@ -1017,6 +1084,24 @@ function viewSettings() {
   };
   const rm = $('#rmLogo');
   if (rm) rm.onclick = async () => { await delFile(S().logo_file); S().logo_file = ''; await save(); route(); };
+  const dpad = mountSig($('#sigDefault'));
+  $('#takerSigSave').onclick = async () => {
+    const blob = await dpad.toBlob();
+    if (!blob) return toast('وقّع داخل المربع أولًا', 'error');
+    const path = `signatures/taker_${Date.now()}.png`;
+    await putFile(path, blob);
+    const prev = S().taker_sig;
+    S().taker_sig = path;
+    await delFileIfUnused(prev);
+    log('حفظ توقيع المحقق'); await save(); toast('تم حفظ توقيع المحقق'); route();
+  };
+  const tsd = $('#takerSigDel');
+  if (tsd) tsd.onclick = async () => {
+    if (!confirm('حذف التوقيع المحفوظ؟ (المحاضر السابقة تحتفظ بتوقيعها)')) return;
+    const prev = S().taker_sig; S().taker_sig = '';
+    await delFileIfUnused(prev);
+    log('حذف توقيع المحقق'); await save(); route();
+  };
   $('#bkExport').onclick = () => exportBackup().catch(e => toast('تعذّر التصدير: ' + e.message, 'error'));
   $('#bkImport').onchange = e => { const fl = e.target.files[0]; if (fl) importBackup(fl).catch(err => toast('تعذّر الاستيراد: ' + err.message, 'error')); };
   const mf = $('#mvFolder');
