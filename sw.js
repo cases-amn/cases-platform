@@ -1,9 +1,9 @@
 /* يعمل بدون إنترنت بعد أول فتح: يخزّن ملفات الواجهة فقط (لا بيانات) */
-const CACHE = 'cases-ui-v7';
+const CACHE = 'cases-ui-v8';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest',
   'css/app.css', 'css/print.css',
-  'js/store.js', 'js/sigpad.js', 'js/app.js',
+  'js/store.js', 'js/sigpad.js', 'js/remote.js', 'js/app.js',
   'fonts/Tajawal-Regular.ttf', 'fonts/Tajawal-Medium.ttf', 'fonts/Tajawal-Bold.ttf',
   'fonts/Amiri-Regular.ttf', 'fonts/Amiri-Bold.ttf',
   'icons/icon-192.png', 'icons/icon-512.png',

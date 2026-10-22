@@ -277,3 +277,4 @@ tr.clickable { cursor: pointer; }
   .toast { bottom: calc(var(--navh) + 80px); }
 }
 .tplitem { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: #fbfcfb; }
+body.remote { padding-bottom: 0 !important; }

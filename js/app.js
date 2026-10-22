@@ -78,8 +78,8 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters'];
-const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters'];
+const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
+const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;
 
 function newUid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2); }
@@ -141,6 +141,7 @@ const app = () => $('#app');
 
 async function boot() {
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (location.hash.startsWith('#/r/')) return viewRemote();   // صفحة المجيب على طلب الإفادة
   let st;
   try { st = await Store.init(); } catch (e) { st = 'choose'; }
   if (st === 'ready') return openData();
@@ -247,6 +248,11 @@ function route() {
       if (sid === 'new') return viewStatementForm(cs, null, q.get('party'));
       const st = DB.statements.find(s => s.id === +sid && s.case_id === cs.id);
       if (st) return c === 'print' ? viewStatementPrint(cs, st) : viewStatementForm(cs, st);
+    }
+    if (b === 'remote') {
+      if (sid === 'new') return viewRemoteRequestForm(cs, q.get('party'));
+      const rq = DB.requests.find(r => r.id === +sid && r.case_id === cs.id);
+      if (rq) return viewRemoteRequest(cs, rq);
     }
     if (b === 'letter') {
       if (sid === 'new') return viewLetterForm(cs, null, q.get('type'), q.get('party'));
@@ -427,6 +433,7 @@ function viewCase(c) {
   const atts = DB.attachments.filter(a => a.case_id === c.id);
   const rep = DB.reports.find(r => r.case_id === c.id);
   const letters = DB.letters.filter(l => l.case_id === c.id);
+  const reqs = DB.requests.filter(r => r.case_id === c.id);
   const pName = id => (byId('parties', id) || {}).name || '—';
   const pRole = id => (byId('parties', id) || {}).party_role || '';
   shell(`
@@ -437,7 +444,7 @@ function viewCase(c) {
         <a class="btn ghost" href="#/case/${c.id}/edit">تعديل البيانات</a>
         <button class="btn danger" id="delCase">حذف</button></div>
     </div>
-    <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'],
+    <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'], ['sRemote', 'إفادة عن بُعد (' + reqs.length + ')'],
       ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير'], ['sLetters', 'الخطابات (' + letters.length + ')']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
 
     <div class="card" id="sMain"><h2>البيانات الرئيسية</h2>
@@ -478,7 +485,7 @@ function viewCase(c) {
         <tr class="hd"><th>م</th><th>الطرف</th><th>الصفة</th><th>التاريخ</th><th>سمعها</th><th>التوقيع</th><th></th></tr>
         ${sts.map((s, i) => `<tr>
           <td class="nomob">${i + 1}</td>
-          <td data-l="الطرف"><b>${esc(pName(s.party_id))}</b></td>
+          <td data-l="الطرف"><b>${esc(pName(s.party_id))}</b>${s.remote ? ' <span class="badge st-مرفوعة">عن بُعد</span>' : ''}</td>
           <td data-l="الصفة"><span class="badge role">${esc(pRole(s.party_id))}</span></td>
           <td data-l="التاريخ">${esc(s.statement_date || '—')}</td>
           <td data-l="سمعها">${esc(s.taker_name || '—')}</td>
@@ -489,6 +496,19 @@ function viewCase(c) {
             <button class="btn sm danger" data-sdel="${s.id}">حذف</button></div></td></tr>`).join('')}
       </table>` : '<div class="empty">لا توجد محاضر بعد — أضف الأطراف ثم اضغط «سماع أقوال»</div>'}
       <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/statement/new">+ محضر سماع أقوال جديد</a></div>
+    </div>
+
+    <div class="card" id="sRemote"><h2>طلبات الإفادة عن بُعد</h2>
+      ${reqs.length ? `<table class="rt">
+        <tr class="hd"><th>م</th><th>الطرف</th><th>ينتهي</th><th>الحالة</th><th></th></tr>
+        ${reqs.map((r, i) => { const [t, cls] = remoteStatus(r); return `<tr>
+          <td class="nomob">${i + 1}</td>
+          <td data-l="الطرف"><b>${esc(pName(r.party_id))}</b></td>
+          <td data-l="ينتهي">${esc(fmtWhen(r.expires_at))}</td>
+          <td data-l="الحالة"><span class="badge ${cls}">${t}</span></td>
+          <td class="actions-cell"><div class="btns"><a class="btn sm" href="#/case/${c.id}/remote/${r.id}">فتح</a></div></td></tr>`; }).join('')}
+      </table>` : '<div class="empty">أرسل للطرف رابطًا بالواتساب فيه أسئلتك، يجيب ويوقّع، ويعيد لك ملف الإفادة فيصير محضرًا في القضية</div>'}
+      <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/remote/new">+ طلب إفادة عن بُعد</a></div>
     </div>
 
     <div class="card" id="sAtt"><h2>الخطابات والمرفقات</h2>
@@ -1006,7 +1026,7 @@ function viewStatementPrint(c, st) {
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( محضر سماع أقوال )</span></div>
-    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
+    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، ${st.remote ? `وردت إفادة ${roleWord(p.party_role)} الموضحة بياناته أدناه إلكترونيًا عن بُعد${st.remote_at ? ` (${esc(fmtWhen(st.remote_at))})` : ''}، ونصها` : `تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه`}:</div>
     <table class="pdata">
       <tr><th>الاســم</th><td colspan="3"><b>${esc(p.name)}</b></td><th>الجنسية</th><td>${esc(p.nationality || '—')}</td></tr>
       <tr><th>رقم الهوية</th><td>${esc(p.national_id || '—')}</td><th>الجنس</th><td>${esc(p.gender || '—')}</td><th>تاريخ الميلاد</th><td>${esc(p.birth_date || '—')}</td></tr>
@@ -1403,12 +1423,14 @@ function mergeCases(src) {
   remap('statements', r => ({ party_id: map.parties[r.party_id] || null }));
   remap('attachments'); remap('reports');
   remap('letters', r => ({ party_id: r.party_id ? (map.parties[r.party_id] || null) : null }));
+  remap('requests', r => ({ party_id: map.parties[r.party_id] || null, statement_id: r.statement_id ? (map.statements[r.statement_id] || null) : null }));
   DB.seq.case_no = Math.max(DB.seq.case_no || 0, ...DB.cases.map(caseNoOf), 0);
   return { added, updated };
 }
 async function importBackup(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch (e) { return toast('الملف ليس نسخة احتياطية صالحة', 'error'); }
+  if (data && data.app === 'cases-platform' && data.kind === 'response') return acceptResponse(data);
   if (!data || data.app !== 'cases-platform' || !data.db) return toast('الملف ليس نسخة احتياطية من هذه المنصة', 'error');
   const src = data.db, n = (src.cases || []).length;
   const same = (src.cases || []).filter(c => c.uid && DB.cases.some(x => x.uid === c.uid)).length;
