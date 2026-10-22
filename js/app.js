@@ -69,6 +69,14 @@ const DEFAULT_SETTINGS = {
   def_director_title: 'مدير شرطة منطقة المدينة المنورة', def_director_rank: 'اللواء', def_director_name: '',
   sender_assist_title: 'مساعد مدير الشرطة لشؤون الأمن', sender_assist_rank: 'عميد', sender_assist_name: '',
   lock_hash: '', lock_salt: '',
+  report_templates: [
+    { name: 'عدم ثبوت الإساءة (حفظ)',
+      result: 'بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، لم يثبت وجود أي إساءة استخدام للسلطة من قبل رجل الأمن {المدعى عليه}.',
+      opinion: 'حفظ الشكوى لعدم ثبوت ما يستوجب الاستمرار فيها.' },
+    { name: 'ثبوت الإساءة (إدانة)',
+      result: 'بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، ثبت قيام رجل الأمن {المدعى عليه} بإساءة استخدام السلطة تجاه {المدعي}.',
+      opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
+  ],
 };
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters'];
@@ -612,10 +620,19 @@ function splitHead(h) {
   return pos ? [pos, h.slice(pos.length + 1).trim()] : ['', h];
 }
 const joinHead = (t, e) => [t, e].map(x => (x || '').trim()).filter(Boolean).join(' ');
+/** منصب مقترح حسب نوع الجهة: القوة/الوحدة ← قائد، وغيرها ← مدير */
+function guessTitle(entity) {
+  const e = (entity || '').trim();
+  if (!e) return '';
+  if (/^(ال)?(قوة|قوات|وحدة|كتيبة|سرية|لواء|فوج)/.test(e)) return 'قائد';
+  if (/^(ال)?(لجنة|هيئة|مجلس)/.test(e)) return 'رئيس';
+  return 'مدير';
+}
 function headOf(p) {
   if (!p) return ['', ''];
   if (p.head_title || p.head_entity) return [p.head_title || '', p.head_entity || ''];
-  return p.unit_head ? splitHead(p.unit_head) : ['', ''];
+  if (p.unit_head) return splitHead(p.unit_head);
+  return p.unit ? [guessTitle(p.unit), p.unit] : ['', ''];   // لم يُحدَّد المخاطَب: نقترحه من جهة العمل
 }
 
 function partyModal(c, p) {
@@ -673,7 +690,7 @@ function partyModal(c, p) {
   pf.unit.onchange = () => {
     if (pf.head_entity.value.trim() || pf.head_title.value.trim()) return;
     const old = DB.parties.find(x => x.unit === pf.unit.value.trim() && joinHead(...headOf(x)));
-    const [t, e] = old ? headOf(old) : ['', pf.unit.value.trim()];
+    const [t, e] = old ? headOf(old) : [guessTitle(pf.unit.value), pf.unit.value.trim()];
     pf.head_title.value = t; pf.head_entity.value = e; prev();
   };
   $('#pcancel', m).onclick = () => m.remove();
@@ -991,14 +1008,11 @@ function viewStatementPrint(c, st) {
     <div class="ptitle"><span>( محضر سماع أقوال )</span></div>
     <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
     <table class="pdata">
-      <tr class="hd"><th>الاســم</th><th>رقم الهوية</th><th>الجنسية</th><th>الجنس</th></tr>
-      <tr><td>${esc(p.name)}</td><td>${esc(p.national_id || '—')}</td><td>${esc(p.nationality || '—')}</td><td>${esc(p.gender || '—')}</td></tr>
-      <tr class="hd"><th>تاريخ الميلاد</th><th>الحالة الاجتماعية</th><th>المؤهل العلمي</th><th>المهنة / الرتبة</th></tr>
-      <tr><td>${esc(p.birth_date || '—')}</td><td>${esc(p.marital || '—')}</td><td>${esc(p.education || '—')}</td><td>${esc(p.rank_job || '—')}</td></tr>
-      <tr class="hd"><th colspan="2">جهة العمل</th><th colspan="2">رقم الجوال</th></tr>
-      <tr><td colspan="2">${esc(p.unit || '—')}</td><td colspan="2">${esc(p.phone || '—')}</td></tr>
-      <tr class="hd"><th colspan="4">العنوان</th></tr>
-      <tr><td colspan="4">${esc(p.address || '—')}</td></tr>
+      <tr><th>الاســم</th><td colspan="3"><b>${esc(p.name)}</b></td><th>الجنسية</th><td>${esc(p.nationality || '—')}</td></tr>
+      <tr><th>رقم الهوية</th><td>${esc(p.national_id || '—')}</td><th>الجنس</th><td>${esc(p.gender || '—')}</td><th>تاريخ الميلاد</th><td>${esc(p.birth_date || '—')}</td></tr>
+      <tr><th>الحالة الاجتماعية</th><td>${esc(p.marital || '—')}</td><th>المؤهل العلمي</th><td>${esc(p.education || '—')}</td><th>المهنة / الرتبة</th><td>${esc(p.rank_job || '—')}</td></tr>
+      <tr><th>جهة العمل</th><td colspan="3">${esc(p.unit || '—')}</td><th>رقم الجوال</th><td>${esc(p.phone || '—')}</td></tr>
+      <tr><th>العنوان</th><td colspan="5">${esc(p.address || '—')}</td></tr>
     </table>
     <div class="qa">${esc((st.text || '').trim())}</div>
     <div class="sigrow">
@@ -1008,7 +1022,7 @@ function viewStatementPrint(c, st) {
         <div>${esc(st.taker_rank)}${st.taker_rank ? ' / ' : ''}${esc(st.taker_name)}</div><div>التوقيع /</div>
         ${st.taker_sig_path ? `<img class="sigimg" data-file="${esc(st.taker_sig_path)}" alt="">` : ''}</div>
     </div></div>`;
-  const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 11mm 14mm; }', 'مقاس A4');
+  const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 8mm; }', 'مقاس A4');
   pv.ready.then(pv.scaler);
 }
 
@@ -1154,7 +1168,9 @@ function viewLetterForm(c, lt, newType, partyId) {
     refresh();
   };
   if (f.req) { f.req.onchange = refresh; f.req_detail.oninput = refresh; }
-  const toPrev = () => { const t = cur().to; $('#toPrev').textContent = t ? `سيُكتب في الخطاب: سعادة ${t} المحترم` : ''; };
+  const toPrev = () => { const t = cur().to, el = $('#toPrev');
+    el.textContent = t ? `سيُكتب في الخطاب: سعادة ${t} المحترم` : '⚠ لم يُحدَّد المخاطَب — اكتب المنصب والجهة (مثال: مدير / مركز شرطة الخالدية)، أو أضف «جهة العمل» في بيانات المدعى عليه';
+    el.style.color = t ? '' : 'var(--red)'; };
   if (f.to_title) { f.to_title.oninput = toPrev; f.to_entity.oninput = toPrev; const op = f.party_id.onchange; f.party_id.onchange = () => { op(); toPrev(); }; toPrev(); }
   refresh();
   $('#regen').onclick = () => {
@@ -1180,7 +1196,7 @@ function viewLetterForm(c, lt, newType, partyId) {
 function viewLetterPrint(c, l) {
   const x = senders()[l.sender] || senders().assist;
   const to = (l.to || '').trim();
-  const toLine = !to ? '(      )' : /^(سعادة|معالي|صاحب|فضيلة)/.test(to) ? to : 'سعادة ' + to;
+  const toLine = !to ? 'سعادة / ...................................................' : /^(سعادة|معالي|صاحب|فضيلة)/.test(to) ? to : 'سعادة ' + to;
   const html = `<div class="sheet one" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(l.letter_number)], ['التاريخ :', esc(l.letter_date) + (l.letter_date ? 'هـ' : '')], ['المشفوعات :', esc(l.attachments)]])}
     <div class="lt-to"><span>${esc(toLine)}</span><span>المحترم</span></div>
@@ -1193,6 +1209,15 @@ function viewLetterPrint(c, l) {
     $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
     pv.scaler();
   });
+}
+
+// ---- صيغ النتيجة والمرئيات ----
+function fillTemplate(c, t) {
+  const ps = DB.parties.filter(p => p.case_id === c.id);
+  const cl = ps.filter(p => p.party_role === 'مدعي').map(partyLabel).join(' و') || '(      )';
+  const df = ps.filter(p => p.party_role === 'مدعى عليه')
+    .map(p => (p.rank_job ? p.rank_job.replace(/\s*\/\s*$/, '') + '/ ' : '') + p.name).join(' و') || '(      )';
+  return (t || '').split('{المدعي}').join(cl).split('{المدعى عليه}').join(df);
 }
 
 function buildProcedures(c) {
@@ -1232,6 +1257,10 @@ function viewReportForm(c) {
     <div class="card"><h2>الإجراءات <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
       <textarea name="procedures_text" class="amiri" style="min-height:130px">${esc(r.procedures_text)}</textarea>
       <div class="hint">تُدرج محاضر سماع الأقوال المسجلة مرقّمة — أضف أو عدّل ما تحتاجه</div></div>
+    <div class="card"><h2>صيغة جاهزة للنتيجة والمرئيات</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">${(S().report_templates || []).map((t, i) =>
+        `<button type="button" class="btn ghost" data-tpl="${i}">${esc(t.name)}</button>`).join('') || '<span class="muted">لا توجد صيغ — أضفها من الإعدادات</span>'}</div>
+      <div class="hint">تملأ «النتيجة» و«المرئيات» بأسماء أطراف هذه القضية، ثم تعدّلها كما تشاء. الصيغ تُعدَّل من «الإعدادات».</div></div>
     <div class="card"><h2>النتيجة</h2>
       <textarea name="result_text" class="amiri" placeholder="بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، لم يثبت وجود أي إساءة استخدام للسلطة من قبل رجل الأمن المذكور.">${esc(r.result_text)}</textarea></div>
     <div class="card"><h2>المرئيات</h2>
@@ -1245,6 +1274,12 @@ function viewReportForm(c) {
   const f = $('#f');
   bindToday(f);
   $('#regenRef').onclick = () => { if (!f.ref_text.value.trim() || confirm('استبدال نص الإشارة بالصيغة المولّدة؟')) f.ref_text.value = buildRefText(c, parties); };
+  $$('[data-tpl]').forEach(b => b.onclick = () => {
+    const t = S().report_templates[+b.dataset.tpl];
+    if ((f.result_text.value.trim() || f.opinion_text.value.trim()) && !confirm(`استبدال النتيجة والمرئيات بصيغة «${t.name}»؟`)) return;
+    setVal(f.result_text, fillTemplate(c, t.result)); setVal(f.opinion_text, fillTemplate(c, t.opinion));
+    toast('تم إدراج الصيغة — راجعها قبل الحفظ');
+  });
   $('#regenProc').onclick = () => { if (!f.procedures_text.value.trim() || confirm('استبدال نص الإجراءات بالصيغة المولّدة؟')) f.procedures_text.value = buildProcedures(c); };
   let wantPrint = false;
   $('[data-print]', f).onclick = () => { wantPrint = true; };
@@ -1485,6 +1520,13 @@ function viewSettings() {
       </div>
       <div class="hint">يُختار المرسل في كل خطاب، ويظهر توقيعه أسفل الخطاب المطبوع.</div></div>
 
+    <div class="card" id="tplCard"><h2>صيغ النتيجة والمرئيات في التقرير</h2>
+      <div class="hint" style="margin-bottom:10px">اكتب {المدعي} و{المدعى عليه} في النص ليُستبدلا تلقائيًا بأسماء أطراف القضية.</div>
+      <div id="tplList"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+        <button type="button" class="btn ghost" id="tplAdd">+ إضافة صيغة</button>
+        <button type="button" class="btn gold" id="tplSave">حفظ الصيغ</button></div></div>
+
     <div class="card"><h2>الموقّعون الافتراضيون في التقرير</h2>
       <div class="grid g3">${signer('prepared', 'معد التقرير')}${signer('reviewed', 'راجعه')}${signer('approved', 'أجازه')}</div></div>
 
@@ -1525,6 +1567,25 @@ function viewSettings() {
       S().logo_file = path;
     }
     log('حفظ الإعدادات'); await save(); toast('تم حفظ الإعدادات'); route();
+  };
+  // ---- محرر الصيغ ----
+  let tpls = JSON.parse(JSON.stringify(S().report_templates || []));
+  const drawTpls = () => {
+    $('#tplList').innerHTML = tpls.map((t, i) => `<div class="tplitem" data-i="${i}">
+      <div class="inline"><input type="text" data-k="name" value="${esc(t.name)}" placeholder="اسم الصيغة">
+        <button type="button" class="btn sm danger" data-tdel="${i}">حذف</button></div>
+      <label style="margin-top:8px">النتيجة</label><textarea data-k="result" class="amiri" style="min-height:70px">${esc(t.result)}</textarea>
+      <label style="margin-top:8px">المرئيات</label><textarea data-k="opinion" class="amiri" style="min-height:60px">${esc(t.opinion)}</textarea></div>`).join('')
+      || '<div class="empty">لا توجد صيغ</div>';
+    $$('#tplList [data-k]').forEach(el => el.oninput = () => { tpls[+el.closest('.tplitem').dataset.i][el.dataset.k] = el.value; });
+    $$('[data-tdel]').forEach(b => b.onclick = () => { tpls.splice(+b.dataset.tdel, 1); drawTpls(); });
+    $$('#tplList textarea').forEach(autoGrow);
+  };
+  drawTpls();
+  $('#tplAdd').onclick = () => { tpls.push({ name: 'صيغة جديدة', result: '', opinion: '' }); drawTpls(); };
+  $('#tplSave').onclick = async () => {
+    S().report_templates = tpls.filter(t => (t.name || '').trim()).map(t => ({ name: t.name.trim(), result: t.result.trim(), opinion: t.opinion.trim() }));
+    log('حفظ صيغ التقرير'); await save(); toast('تم حفظ الصيغ');
   };
   const rm = $('#rmLogo');
   if (rm) rm.onclick = async () => { await delFile(S().logo_file); S().logo_file = ''; await save(); route(); };
