@@ -82,7 +82,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 19;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 20;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -264,7 +264,12 @@ function route() {
   if (!a) return viewDashboard();
   if (a === 'new') return viewCaseForm(null);
   if (a === 'stats') return viewStats();
-  if (a === 'settings') return viewSettings();
+  if (a === 'settings') {
+    viewSettings();
+    const sc = q.get('sig') && $('#takerSigCard');
+    if (sc) window.scrollTo(0, sc.getBoundingClientRect().top + scrollY - 70);
+    return;
+  }
   if (a === 'case' && byId('cases', id)) {
     const cs = byId('cases', id);
     if (!b) return viewCase(cs);
@@ -1186,7 +1191,7 @@ function viewStatementPrint(c, st) {
   const html = `<div class="sheet flow" id="sheet" style="--fs:14.5pt">
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
-    <div class="ptitle"><span>( محضر سماع أقوال )</span></div>
+    <div class="ptitle"><span>( ${esc(datedTitle('محضر سماع أقوال', st.statement_date))} )</span></div>
     <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
     <table class="pdata">
       <tr><th>الاســم</th><td colspan="3"><b>${esc(p.name)}</b></td><th>الجنسية</th><td>${esc(p.nationality || '—')}</td></tr>
@@ -1409,7 +1414,9 @@ function callProcLine(r, p) {
   return `إعداد محضر اتصال على ${who} ${why}.`;
 }
 const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-const recordTitle = r => (r.type === 'open' ? (r.title || '').trim() : '') || RECORD_TYPES[r.type].label;
+/** عنوان المحاضر: «محضر اتصال بتاريخ 14 / 5 / 1448هـ» */
+const datedTitle = (t, d) => (d || '').trim() ? `${t} بتاريخ ${d.trim()}هـ` : t;
+const recordTitle = r =>(r.type === 'open' ? (r.title || '').trim() : '') || RECORD_TYPES[r.type].label;
 /** على من الشكوى: الاسم إن وُجد، وإلا «أحد منسوبي» الجهة، وإلا شرطة المنطقة */
 function againstText(c) {
   const df = caseDefendants(c);
@@ -1495,6 +1502,9 @@ function viewRecordForm(c, rd, newType, partyId) {
         <div class="field"><label>الاسم</label><input type="text" name="taker_name" value="${esc(v.taker_name)}"></div>
       </div>
       <div class="hint">القيمة الافتراضية من الإعدادات (رتبة واسم المحقق).</div>
+      ${S().taker_sig ? `<label class="sigmode" style="margin-top:10px"><input type="checkbox" name="with_sig" value="1" ${v.no_sig ? '' : 'checked'}>
+          <span>إدراج توقيعي المحفوظ في المحضر</span><img class="sig-img" data-file="${esc(S().taker_sig)}" alt=""></label>`
+        : `<div class="hint" style="color:var(--red); margin-top:8px">لا يوجد توقيع محفوظ لك — احفظه مرة واحدة من <a href="#/settings?sig=1">الإعدادات ← توقيع المحقق</a> فيظهر في كل المحاضر تلقائيًا.</div>`}
     </div>
     <div class="formbar"><button class="btn gold" type="submit">حفظ</button>
       <button class="btn ghost" type="submit" data-print="1">حفظ ثم طباعة</button></div>
@@ -1525,6 +1535,8 @@ function viewRecordForm(c, rd, newType, partyId) {
     e.preventDefault();
     const o = cur();
     o.body = body.value;
+    if (S().taker_sig) o.no_sig = !f.with_sig.checked;
+    delete o.with_sig;
     let rec = rd;
     if (!rec) { rec = { id: nextId('records'), case_id: c.id, created_at: nowStr() }; DB.records.push(rec); }
     Object.assign(rec, o, { updated_at: nowStr() });
@@ -1536,11 +1548,14 @@ function viewRecordForm(c, rd, newType, partyId) {
 }
 
 function viewRecordPrint(c, r) {
+  const sig = r.no_sig ? '' : S().taker_sig;
   const html = `<div class="sheet one" id="sheet"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number || '')], ['التاريخ :', esc(r.record_date) + (r.record_date ? 'هـ' : '')], ['الموضوع :', esc(recordTitle(r))]])}
-    <div class="ptitle"><span>( ${esc(recordTitle(r))} )</span></div>
+    <div class="ptitle"><span>( ${esc(datedTitle(recordTitle(r), r.record_date))} )</span></div>
     <div class="lt-body">${esc((r.body || '').trim())}</div>
-    <div class="lt-sig"><div class="t">معد المحضر</div>${rankName(r.taker_rank, r.taker_name)}<div style="margin-top:.6em">التوقيع / ...................</div></div>
+    <div class="lt-sig"><div class="t">معد المحضر</div>${rankName(r.taker_rank, r.taker_name)}
+      <div style="margin-top:.6em">التوقيع /${sig ? '' : ' ...................'}</div>
+      ${sig ? `<img class="sigimg" data-file="${esc(sig)}" alt="">` : ''}</div>
   </div></div>`;
   const pv = printShell(html, ['#/case/' + c.id + '/record/' + r.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 0; }');
   pv.ready.then(() => {
@@ -1907,7 +1922,7 @@ function viewSettings() {
     <div class="formbar"><button class="btn gold" type="submit">حفظ الإعدادات</button></div>
     </form>
 
-    <div class="card" id="takerSigCard"><h2>توقيع المحقق (من سمع الأقوال ودوّنها)</h2>
+    <div class="card" id="takerSigCard"><h2>توقيع المحقق (لمحاضر سماع الأقوال ومحاضر الإجراءات)</h2>
       ${s.taker_sig ? `<div style="margin-bottom:12px"><label>التوقيع المحفوظ حاليًا</label>
         <img class="sig-img" data-file="${esc(s.taker_sig)}" alt="">
         <div style="margin-top:8px"><button type="button" class="btn sm danger" id="takerSigDel">حذف التوقيع المحفوظ</button></div></div>` : ''}
