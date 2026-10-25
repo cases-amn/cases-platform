@@ -82,7 +82,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 20;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 21;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -1121,8 +1121,14 @@ function printHead(metaRows) {
       <div class="meta">${metaRows.map(r => `<div class="row"><span class="lbl">${r[0]}</span><span class="dots">${r[1]}</span></div>`).join('')}</div>
     </div>`;
 }
-function printShell(sheetHTML, back, pageRule, info) {
+/** docTitle يصير اسم ملف PDF المقترح عند «حفظ PDF» (مثل: محضر اتصال - فلان الفلاني) */
+function printShell(sheetHTML, back, pageRule, info, docTitle) {
   document.body.className = 'printview';
+  if (docTitle) {
+    const prev = document.title;
+    document.title = docTitle.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    onLeave(() => { document.title = prev; });
+  }
   app().innerHTML = `<div class="pv-bar">
       <button class="btn gold" id="doPrint">🖨 طباعة / حفظ PDF</button>
       <a class="btn ghost" href="${back[0]}">${back[1]}</a>
@@ -1142,18 +1148,26 @@ function printShell(sheetHTML, back, pageRule, info) {
   };
   window.addEventListener('resize', scaler);
   onLeave(() => window.removeEventListener('resize', scaler));
-  return { scaler, ready: Promise.all([hydrateImages(app()), document.fonts ? document.fonts.ready : null]) };
+  const imgsLoaded = () => Promise.all($$('img', app()).map(i => i.complete ? null : new Promise(r => { i.onload = i.onerror = r; })));
+  return { scaler, ready: Promise.all([hydrateImages(app()).then(imgsLoaded), document.fonts ? document.fonts.ready : null]) };
 }
 
-/** تصغير الخط تدريجيًا حتى يتسع التقرير لصفحة A4 واحدة */
-function fitOnePage(sheet, maxPt, minPt) {
-  const inner = $('.inner', sheet), cs = getComputedStyle(sheet);
-  const avail = () => sheet.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-  let fs = maxPt;
-  sheet.style.setProperty('--fs', fs + 'pt');
-  while (inner.offsetHeight > avail() && fs > minPt) { fs = Math.round((fs - 0.25) * 100) / 100; sheet.style.setProperty('--fs', fs + 'pt'); }
-  return { fs, fits: inner.offsetHeight <= avail() };
+// كل الأوراق المطبوعة «متدفقة» بهامش الصفحة 8mm وبلا ارتفاع ثابت، فلا تخرج صفحة ثانية فارغة أبدًا
+const PAGE_RULE = '@page { size: A4 portrait; margin: 8mm; }';
+/** تصغير الخط تدريجيًا حتى تتسع الورقة لصفحة A4 واحدة.
+ *  canFlow: إن لم تتسع حتى بأصغر خط يُعاد الخط الطبيعي ويكمل النص في صفحة ثانية (المحاضر)؛
+ *  وإلا يبقى أصغر خط (التقرير والخطاب: صفحة واحدة دائمًا) */
+function fitPage(sheet, maxPt, minPt, canFlow) {
+  const inner = $('.inner', sheet), mm = 96 / 25.4;
+  const avail = (297 - 16 - 4) * mm;   // ارتفاع الصفحة ناقص الهوامش ومسافة أمان
+  const set = v => sheet.style.setProperty('--fs', v + 'pt');
+  let fs = maxPt; set(fs);
+  while (inner.offsetHeight > avail && fs > minPt) { fs = Math.round((fs - 0.25) * 100) / 100; set(fs); }
+  const fits = inner.offsetHeight <= avail;
+  if (!fits && canFlow) { fs = maxPt; set(fs); }
+  return { fs, fits, pages: fits ? 1 : Math.ceil(inner.offsetHeight / ((297 - 16) * mm)) };
 }
+const pagesInfo = res => res.fits ? 'صفحة A4 واحدة' : `${res.pages} صفحات A4 — النص أطول من صفحة واحدة`;
 
 function rankName(rank, name) {
   const r = (rank || '').trim();
@@ -1166,7 +1180,7 @@ function viewReportPrint(c) {
   if (!r) { location.hash = '#/case/' + c.id + '/report'; return; }
   const sec = (h, b) => `<div class="sec"><div class="h">${h}</div><div class="b">${esc((b || '').trim())}</div></div>`;
   const signer = (role, t, rk, nm) => `<div class="role">${role}</div><div>${esc(t)}</div>${rankName(rk, nm)}`;
-  const html = `<div class="sheet one" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(r.report_number)], ['التاريخ :', esc(r.report_date) + (r.report_date ? 'هـ' : '')],
                  ['المشفوعات :', esc(r.attachments_note)], ['الموضوع :', esc(r.subject_line)]])}
     <div class="ptitle"><span>${esc(S().report_title || '( تقييم إجراءات قضية )')}</span></div>
@@ -1178,9 +1192,11 @@ function viewReportPrint(c) {
       </div>
       <div class="sigcenter">${signer('أجــازه', r.approved_title, r.approved_rank, r.approved_name)}</div>
     </div></div></div>`;
-  const pv = printShell(html, ['#/case/' + c.id + '/report', 'تعديل التقرير'], '@page { size: A4 portrait; margin: 0; }');
+  const cl = DB.parties.find(p => p.case_id === c.id && p.party_role === 'مدعي');
+  const pv = printShell(html, ['#/case/' + c.id + '/report', 'تعديل التقرير'], PAGE_RULE, '',
+    `تقييم إجراءات قضية ${c.case_number || c.id}${cl ? ' - ' + cl.name : ''}`);
   pv.ready.then(() => {
-    const res = fitOnePage($('#sheet'), 15.5, 9);
+    const res = fitPage($('#sheet'), 15.5, 9, false);
     $('#pvInfo').textContent = res.fits ? `صفحة A4 واحدة — حجم الخط ${res.fs}` : 'تنبيه: النص طويل جدًا ولا يتسع لصفحة واحدة حتى بأصغر خط، اختصر بعض الفقرات';
     pv.scaler();
   });
@@ -1188,7 +1204,7 @@ function viewReportPrint(c) {
 
 function viewStatementPrint(c, st) {
   const p = byId('parties', st.party_id) || {};
-  const html = `<div class="sheet flow" id="sheet" style="--fs:14.5pt">
+  const html = `<div class="sheet flow" id="sheet" style="--fs:14.5pt"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( ${esc(datedTitle('محضر سماع أقوال', st.statement_date))} )</span></div>
@@ -1207,9 +1223,10 @@ function viewStatementPrint(c, st) {
       <div class="sigbox"><div class="role">سمع الأقوال ودوّنها</div>
         <div>${esc(st.taker_rank)}${st.taker_rank ? ' / ' : ''}${esc(st.taker_name)}</div><div>التوقيع /</div>
         ${st.taker_sig_path ? `<img class="sigimg" data-file="${esc(st.taker_sig_path)}" alt="">` : ''}</div>
-    </div></div>`;
-  const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 8mm; }', 'مقاس A4');
-  pv.ready.then(pv.scaler);
+    </div></div></div>`;
+  const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], PAGE_RULE, '',
+    `محضر سماع أقوال - ${p.name || ''}`);
+  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 14.5, 11.5, true)); pv.scaler(); });
 }
 
 // ========================= تقرير تقييم الإجراءات =========================
@@ -1383,15 +1400,16 @@ function viewLetterPrint(c, l) {
   const x = senders()[l.sender] || senders().assist;
   const to = (l.to || '').trim();
   const toLine = !to ? 'سعادة / ...................................................' : /^(سعادة|معالي|صاحب|فضيلة)/.test(to) ? to : 'سعادة ' + to;
-  const html = `<div class="sheet one" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(l.letter_number)], ['التاريخ :', esc(l.letter_date) + (l.letter_date ? 'هـ' : '')], ['المشفوعات :', esc(l.attachments)]])}
     <div class="lt-to"><span>${esc(toLine)}</span><span>المحترم</span></div>
     <div class="lt-body">${esc((l.body || '').trim())}</div>
     <div class="lt-sig"><div class="t">${esc(x.title)}</div>${rankName(x.rank, x.name)}</div>
   </div></div>`;
-  const pv = printShell(html, ['#/case/' + c.id + '/letter/' + l.id, 'تعديل الخطاب'], '@page { size: A4 portrait; margin: 0; }');
+  const pv = printShell(html, ['#/case/' + c.id + '/letter/' + l.id, 'تعديل الخطاب'], PAGE_RULE, '',
+    `${LETTER_TYPES[l.type] ? LETTER_TYPES[l.type].label : 'خطاب'} - قضية ${c.case_number || c.id}`);
   pv.ready.then(() => {
-    const res = fitOnePage($('#sheet'), 16, 10);
+    const res = fitPage($('#sheet'), 16, 10, false);
     $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
     pv.scaler();
   });
@@ -1549,7 +1567,7 @@ function viewRecordForm(c, rd, newType, partyId) {
 
 function viewRecordPrint(c, r) {
   const sig = r.no_sig ? '' : S().taker_sig;
-  const html = `<div class="sheet one" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow" id="sheet"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number || '')], ['التاريخ :', esc(r.record_date) + (r.record_date ? 'هـ' : '')], ['الموضوع :', esc(recordTitle(r))]])}
     <div class="ptitle"><span>( ${esc(datedTitle(recordTitle(r), r.record_date))} )</span></div>
     <div class="lt-body">${esc((r.body || '').trim())}</div>
@@ -1557,12 +1575,11 @@ function viewRecordPrint(c, r) {
       <div style="margin-top:.6em">التوقيع /${sig ? '' : ' ...................'}</div>
       ${sig ? `<img class="sigimg" data-file="${esc(sig)}" alt="">` : ''}</div>
   </div></div>`;
-  const pv = printShell(html, ['#/case/' + c.id + '/record/' + r.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 0; }');
-  pv.ready.then(() => {
-    const res = fitOnePage($('#sheet'), 16, 10);
-    $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
-    pv.scaler();
-  });
+  // اسم الملف: نوع المحضر - الشخص الذي يخصه (أو مكان المشاهدة، أو المدعي)
+  const p = byId('parties', r.party_id) || DB.parties.find(x => x.case_id === c.id && x.party_role === 'مدعي');
+  const who = (r.party_id && p ? p.name : (r.place || '').trim() || (p ? p.name : '')) || 'قضية ' + (c.case_number || c.id);
+  const pv = printShell(html, ['#/case/' + c.id + '/record/' + r.id, 'تعديل المحضر'], PAGE_RULE, '', `${recordTitle(r)} - ${who}`);
+  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 16, 12, true)); pv.scaler(); });
 }
 
 // ---- صيغ النتيجة والمرئيات ----
