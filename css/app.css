@@ -92,6 +92,14 @@ input[type=text], input[type=password], input[type=number], input[type=tel], inp
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--green); outline-offset: 0; border-color: var(--green); }
 textarea { min-height: 110px; resize: vertical; line-height: 1.9; }
 textarea.amiri { font-family: 'Tajawal', sans-serif; font-weight: 500; font-size: 17px; line-height: 1.9; color: #000; }
+/* حقل سطر واحد يكبر مع النص (يُحوَّل من input في growFields) */
+textarea.line { min-height: 42px; line-height: 1.6; resize: none; overflow-y: hidden; display: block; }
+.sugg { position: relative; z-index: 30; margin-top: 4px; display: flex; flex-direction: column; border: 1px solid #b9c8bf;
+  border-radius: 9px; background: #fff; box-shadow: 0 6px 18px rgba(0,0,0,.12); max-height: 260px; overflow: auto; }
+.sugg button { text-align: right; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 10px 12px;
+  font: inherit; font-weight: 700; color: #000; cursor: pointer; line-height: 1.6; }
+.sugg button:last-child { border-bottom: 0; }
+.sugg button:hover, .sugg button:active { background: #eef5f0; }
 .grid { display: grid; gap: 14px; }
 .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: 1fr 1fr 1fr; } .g4 { grid-template-columns: repeat(4, 1fr); }
 .span-all { grid-column: 1 / -1; }
@@ -280,6 +288,7 @@ tr.clickable { cursor: pointer; }
   body.typing .bottomnav { display: none; }
   body.typing .formbar { position: static; background: none; }
   textarea { overflow-y: hidden; resize: none; }
+  textarea.line { min-height: 48px; }
 
   .modal-bg { align-items: flex-end; padding: 0; }
   .modal { border-radius: 18px 18px 0 0; max-height: 92vh; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }

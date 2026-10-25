@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const APP_VERSION = 15;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 16;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;
@@ -291,6 +291,69 @@ function autoGrow(ta) {
 }
 function setVal(el, v) { el.value = v; autoGrow(el); }
 document.addEventListener('input', e => autoGrow(e.target));
+
+// الحقول ذات السطر الواحد تصبح مربعات تكبر مع النص، فتظهر العبارة كاملة مهما طالت.
+// تبقى سطرًا واحدًا في المعنى: Enter لا يضيف سطرًا، والأسطر الملصقة تُدمج.
+// (الحقول الرقمية بـ inputmode تبقى كما هي)
+const growRO = typeof ResizeObserver === 'function' ? new ResizeObserver(es => es.forEach(e => {
+  const w = Math.round(e.contentRect.width);
+  if (w && +e.target.dataset.w !== w) { e.target.dataset.w = w; autoGrow(e.target); }
+})) : null;
+const growAll = () => $$('textarea').forEach(autoGrow);
+function growFields(root) {
+  $$('input[type=text]:not([inputmode])', root).forEach(inp => {
+    const ta = document.createElement('textarea');
+    for (const a of inp.attributes) if (!/^(type|value|list)$/.test(a.name)) ta.setAttribute(a.name, a.value);
+    if (inp.getAttribute('list')) ta.dataset.list = inp.getAttribute('list');
+    ta.classList.add('line');
+    ta.rows = 1;
+    ta.value = inp.value;
+    inp.replaceWith(ta);
+  });
+  if (growRO) $$('textarea', root).forEach(t => growRO.observe(t));
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches && e.target.matches('textarea.line')) e.preventDefault();
+});
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.matches && t.matches('textarea.line') && /[\r\n]/.test(t.value)) { t.value = t.value.replace(/\s*[\r\n]+\s*/g, ' '); autoGrow(t); }
+}, true);
+// أزرار تملأ الحقول برمجيًا (مثل «اليوم» والصيغ الجاهزة) لا تطلق حدث input
+document.addEventListener('click', () => setTimeout(growAll, 0));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(growAll);
+
+// اقتراحات القوائم (datalist) للحقول التي صارت مربعات نص
+let suggBox = null;
+function showSugg(ta) {
+  const dl = ta.dataset.list && document.getElementById(ta.dataset.list);
+  hideSugg();
+  if (!dl) return;
+  const q = ta.value.trim();
+  const opts = Array.from(dl.options).map(o => o.value).filter(v => v && v !== q && (!q || v.includes(q))).slice(0, 8);
+  if (!opts.length) return;
+  suggBox = document.createElement('div');
+  suggBox.className = 'sugg';
+  suggBox.owner = ta;
+  suggBox.innerHTML = opts.map(v => `<button type="button">${esc(v)}</button>`).join('');
+  suggBox.addEventListener('mousedown', e => e.preventDefault());   // يبقى التركيز في الحقل
+  suggBox.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    ta.value = b.textContent;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+    hideSugg();
+  });
+  ta.insertAdjacentElement('afterend', suggBox);
+}
+function hideSugg() { if (suggBox) { suggBox.remove(); suggBox = null; } }
+document.addEventListener('focusin', e => { if (e.target.dataset && e.target.dataset.list) showSugg(e.target); else hideSugg(); });
+document.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.list) showSugg(e.target); });
+document.addEventListener('focusout', e => {
+  const t = e.target;
+  setTimeout(() => { if (suggBox && suggBox.owner === t && document.activeElement !== t) hideSugg(); }, 150);
+});
 // أثناء الكتابة نخفي الشريط السفلي ونفكّ تثبيت زر الحفظ حتى تبقى مساحة النص ظاهرة فوق لوحة المفاتيح
 const isTypingEl = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(checkbox|radio|file|button|submit)$/.test(el.type)));
 document.addEventListener('focusin', e => { if (isTypingEl(e.target)) document.body.classList.add('typing'); });
@@ -315,7 +378,8 @@ function shell(content, active) {
   const l = $('#lockNow');
   if (l) l.onclick = () => { sessionStorage.removeItem('unlocked'); screenLock(); };
   hydrateImages();
-  setTimeout(() => $$('textarea').forEach(autoGrow), 0);
+  growFields(app());
+  setTimeout(growAll, 0);
 }
 
 function modal(html) {
@@ -324,6 +388,8 @@ function modal(html) {
   bg.innerHTML = `<div class="modal">${html}</div>`;
   bg.addEventListener('click', e => { if (e.target === bg) bg.remove(); });
   document.body.appendChild(bg);
+  growFields(bg);
+  setTimeout(growAll, 0);
   return bg;
 }
 function dateField(name, label, value, ph) {
