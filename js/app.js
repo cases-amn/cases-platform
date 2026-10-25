@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const APP_VERSION = 12;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 13;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;
@@ -265,7 +265,7 @@ function route() {
       if (st) return c === 'print' ? viewStatementPrint(cs, st) : viewStatementForm(cs, st);
     }
     if (b === 'remote') {
-      if (sid === 'new') return viewRemoteRequestForm(cs, q.get('party'));
+      if (sid === 'new') return viewRemoteRequestForm(cs, q.get('party'), q.get('st'));
       const rq = DB.requests.find(r => r.id === +sid && r.case_id === cs.id);
       if (rq) return viewRemoteRequest(cs, rq);
     }
@@ -508,6 +508,7 @@ function viewCase(c) {
           <td class="actions-cell"><div class="btns">
             <a class="btn sm" href="#/case/${c.id}/statement/${s.id}/print">طباعة</a>
             <a class="btn sm ghost" href="#/case/${c.id}/statement/${s.id}">تعديل</a>
+            <a class="btn sm ghost" href="#/case/${c.id}/remote/new?st=${s.id}">أسئلة إضافية</a>
             <button class="btn sm danger" data-sdel="${s.id}">حذف</button></div></td></tr>`).join('')}
       </table>` : '<div class="empty">لا توجد محاضر بعد — أضف الأطراف ثم اضغط «سماع أقوال»</div>'}
       <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/statement/new">+ محضر سماع أقوال جديد</a></div>
@@ -593,18 +594,16 @@ function viewCase(c) {
     const p = byId('parties', b.dataset.pdel);
     if (!confirm(`حذف الطرف «${p.name}» ومحاضره؟`)) return;
     const gone = DB.statements.filter(s => s.party_id === p.id);
-    for (const s of gone) await delFile(s.signature_path);
     DB.statements = DB.statements.filter(s => s.party_id !== p.id);
-    for (const s of gone) await delFileIfUnused(s.taker_sig_path);
+    for (const s of gone) for (const fp of statementFiles(s)) await delFileIfUnused(fp);
     DB.parties = DB.parties.filter(x => x.id !== p.id);
     await save(); toast('تم حذف الطرف'); route();
   });
   $$('[data-sdel]').forEach(b => b.onclick = async () => {
     if (!confirm('حذف المحضر؟')) return;
     const s = byId('statements', b.dataset.sdel);
-    await delFile(s.signature_path);
     DB.statements = DB.statements.filter(x => x.id !== s.id);
-    await delFileIfUnused(s.taker_sig_path);
+    for (const fp of statementFiles(s)) await delFileIfUnused(fp);
     log('حذف محضر', 'قضية #' + c.id);
     await save(); toast('تم حذف المحضر'); route();
   });
@@ -794,8 +793,29 @@ function mountSig(host) {
 async function delFileIfUnused(path) {
   if (!path) return;
   const used = S().taker_sig === path || S().logo_file === path ||
-    DB.statements.some(s => s.signature_path === path || s.taker_sig_path === path);
+    DB.statements.some(s => s.signature_path === path || s.taker_sig_path === path || (s.answer_sigs || []).includes(path));
   if (!used) await delFile(path);
+}
+/** كل ملفات التوقيع في محضر (الرئيسي + توقيعات الأجوبة + المحقق) */
+const statementFiles = s => [s.signature_path, s.taker_sig_path, ...(s.answer_sigs || [])].filter(Boolean);
+
+// ---- توقيع الطرف عند نهاية كل جواب (الإفادة عن بُعد) ----
+const isQ = l => /^\s*س\s*\//.test(l), isA = l => /^\s*ج\s*\//.test(l);
+const answerCount = text => String(text || '').split('\n').filter(isA).length;
+/** نص الاستجواب للطباعة: توقيع صغير بعد آخر كلمة في كل جواب، عدا الأخير (توقيعه هو الرئيسي أسفل المحضر) */
+function qaHTML(text, sigs) {
+  const lines = String(text || '').trim().split('\n'), ends = [];
+  let ai = -1, inA = false;
+  lines.forEach((l, i) => {
+    if (isA(l)) { ai++; inA = true; ends[ai] = i; }
+    else if (isQ(l)) inA = false;
+    else if (inA && l.trim()) ends[ai] = i;
+  });
+  const out = lines.map(esc);
+  (sigs || []).forEach((p, k) => {
+    if (p && k < ai && ends[k] != null) out[ends[k]] = out[ends[k]].trimEnd() + ` <img class="asig" data-file="${esc(p)}" alt="">`;
+  });
+  return out.join('\n');
 }
 
 /** السؤال الأول الافتراضي في المحضر حسب صفة الطرف (بياناته الشخصية مطبوعة أصلًا في المحضر) */
@@ -936,8 +956,8 @@ function viewStatementForm(c, st, preParty) {
         const path = `signatures/sig_${c.id}_${rec.id}_${Date.now()}.png`;
         await putFile(path, blob);
         rec.signature_path = path;
-        if (oldSig) await delFile(oldSig);
-      } else if (o.remove_sig && oldSig) { await delFile(oldSig); rec.signature_path = ''; }
+        await delFileIfUnused(oldSig);   // قد يبقى مستخدمًا كتوقيع على أحد الأجوبة
+      } else if (o.remove_sig && oldSig) { rec.signature_path = ''; await delFileIfUnused(oldSig); }
       // توقيع المحقق
       const oldTaker = rec.taker_sig_path || '';
       if (o.taker_mode === 'saved') rec.taker_sig_path = S().taker_sig;
@@ -1051,7 +1071,7 @@ function viewStatementPrint(c, st) {
       <tr><th>جهة العمل</th><td colspan="3">${esc(p.unit || '—')}</td><th>رقم الجوال</th><td>${esc(p.phone || '—')}</td></tr>
       <tr><th>العنوان</th><td colspan="5">${esc(p.address || '—')}</td></tr>
     </table>
-    <div class="qa">${esc((st.text || '').trim())}</div>
+    <div class="qa">${qaHTML(st.text, st.answer_sigs)}</div>
     <div class="sigrow">
       <div class="sigbox"><div class="role">المستمع لأقواله</div><div>الاسم / ${esc(p.name)}</div><div>التوقيع /</div>
         ${st.signature_path ? `<img class="sigimg" data-file="${esc(st.signature_path)}" alt="">` : ''}</div>
@@ -1381,7 +1401,7 @@ async function exportCases(ids) {
   const db = { cases: DB.cases.filter(c => ids.has(c.id)) };
   for (const t of CASE_CHILDREN) db[t] = DB[t].filter(r => ids.has(r.case_id));
   const paths = new Set();
-  db.statements.forEach(st => { if (st.signature_path) paths.add(st.signature_path); if (st.taker_sig_path) paths.add(st.taker_sig_path); });
+  db.statements.forEach(st => statementFiles(st).forEach(fp => paths.add(fp)));
   db.attachments.forEach(a => paths.add(a.filename));
   const out = { app: 'cases-platform', kind: 'cases', exported_at: nowStr(), db, files: await filesToData([...paths]) };
   const one = db.cases.length === 1;

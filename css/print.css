@@ -55,6 +55,8 @@ table.pdata th { background: #ececec; font-weight: 700; width: 15%; }
 table.pdata td { width: auto; }
 table.pdata tr:hover td { background: none; }
 .qa { line-height: 1.75; text-align: justify; white-space: pre-wrap; }
+/* توقيع الطرف الصغير عند آخر كلمة من كل جواب */
+.qa .asig { height: 1.7em; max-width: 30mm; vertical-align: middle; margin-inline-start: 2mm; }
 .sigrow { display: flex; justify-content: space-between; margin-top: 1.1em; break-inside: avoid; }
 .sigrow .sigbox { width: 75mm; }
 .sigimg { max-height: 22mm; max-width: 62mm; display: block; margin: 1mm auto 0; }

@@ -72,20 +72,23 @@ function defaultRemoteIntro(c) {
     `وتاريخ ${c.order_date ? c.order_date + 'هـ' : '(      )'}، نأمل الإجابة على الأسئلة التالية بدقة، ثم التوقيع والإرسال.`;
 }
 
-function viewRemoteRequestForm(c, partyId) {
+/** stId: أسئلة إضافية تُلحق أجوبتها بمحضر موجود (لا يُعرض للطرف شيء من أسئلته السابقة) */
+function viewRemoteRequestForm(c, partyId, stId) {
   const parties = DB.parties.filter(p => p.case_id === c.id);
   if (!parties.length) { toast('أضف الطرف أولًا', 'error'); location.hash = '#/case/' + c.id; return; }
+  const base = stId ? DB.statements.find(s => s.id === +stId && s.case_id === c.id) : null;
   const def = parties.find(p => p.party_role === 'مدعى عليه');
-  let p = byId('parties', partyId) || def || parties[0];
-  let qs = defaultRemoteQuestions(c, p);
+  let p = (base && byId('parties', base.party_id)) || byId('parties', partyId) || def || parties[0];
+  let qs = base ? [{ q: '', t: 'text' }] : defaultRemoteQuestions(c, p);
   let autoFirst = qs[0].q;
   shell(`
-    <div class="page-head"><h1>طلب <span>إفادة عن بُعد</span> — قضية رقم ${esc(c.case_number || c.id)}</h1>
+    <div class="page-head"><h1>${base ? 'أسئلة <span>إضافية</span> لمحضر سابق' : 'طلب <span>إفادة عن بُعد</span>'} — قضية رقم ${esc(c.case_number || c.id)}</h1>
       <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
+    ${base ? `<div class="note">تُلحق الأجوبة بمحضر ${esc(p.name || '')} بتاريخ ${esc(base.statement_date || '—')} بعد آخر جواب فيه، ويوقّع الطرف على كل جواب. لا يظهر للطرف شيء من أسئلته السابقة.</div>` : ''}
     <form id="f">
     <div class="card"><h2>المطلوب إفادته</h2>
       <div class="grid g2">
-        <div class="field"><label>الطرف</label><select name="party_id" id="rqParty">${parties.map(x =>
+        <div class="field"><label>الطرف</label><select name="party_id" id="rqParty" ${base ? 'disabled' : ''}>${(base ? [p] : parties).map(x =>
           `<option value="${x.id}" ${x.id === p.id ? 'selected' : ''}>${esc(x.party_role)} / ${esc(x.name)}</option>`).join('')}</select></div>
         <div class="field"><label>مدة صلاحية الرابط</label><select name="hours">${REMOTE_EXPIRY.map(([h, t]) =>
           `<option value="${h}" ${h === 24 ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
@@ -93,7 +96,7 @@ function viewRemoteRequestForm(c, partyId) {
       <label class="sigmode" style="margin-top:12px"><input type="checkbox" name="use_code" value="1" checked>
         <span>طلب رمز دخول من 4 أرقام (يُرسل له في رسالة منفصلة أو بالاتصال) — يمنع فتح الرابط لو أُعيد توجيهه لغيره</span></label>
       <div class="field" style="margin-top:12px"><label>المقدمة</label>
-        <textarea name="intro" class="amiri" style="min-height:70px">${esc(defaultRemoteIntro(c))}</textarea></div>
+        <textarea name="intro" class="amiri" style="min-height:70px">${esc(base ? 'إلحاقًا بإفادتكم السابقة، نأمل الإجابة على الأسئلة التالية بدقة، ثم التوقيع والإرسال.' : defaultRemoteIntro(c))}</textarea></div>
     </div>
     <div class="card"><h2>الأسئلة</h2>
       <div id="qList"></div>
@@ -136,11 +139,12 @@ function viewRemoteRequestForm(c, partyId) {
     if (!clean.length) return toast('أضف سؤالًا واحدًا على الأقل', 'error');
     const bad = clean.find(x => x.t === 'choice' && x.o.length < 2);
     if (bad) return toast('سؤال الاختيار يحتاج اختيارين على الأقل', 'error');
-    const req = { id: nextId('requests'), case_id: c.id, party_id: +o.party_id, rid: newUid(), intro: f.intro.value.trim(),
+    const req = { id: nextId('requests'), case_id: c.id, party_id: p.id, rid: newUid(), intro: f.intro.value.trim(),
+      append_to: base ? base.id : undefined,
       questions: clean, code: o.use_code ? String(Math.floor(1000 + Math.random() * 9000)) : '',
       created_at: Date.now(), expires_at: Date.now() + (+o.hours) * 3600e3, status: 'pending' };
     DB.requests.push(req);
-    log('إنشاء طلب إفادة عن بُعد', 'قضية #' + c.id);
+    log(base ? 'إنشاء أسئلة إضافية عن بُعد' : 'إنشاء طلب إفادة عن بُعد', 'قضية #' + c.id);
     await save();
     location.hash = `#/case/${c.id}/remote/${req.id}`;
   };
@@ -163,7 +167,9 @@ async function viewRemoteRequest(c, req) {
         <div><label>ينتهي</label><div>${esc(fmtWhen(req.expires_at))}</div></div>
         <div><label>عدد الأسئلة</label><div>${req.questions.length}</div></div>
       </div>
-      ${req.status === 'done' && req.statement_id ? `<div style="margin-top:14px"><a class="btn gold" href="#/case/${c.id}/statement/${req.statement_id}">فتح المحضر المستلم</a></div>` : ''}
+      ${req.status === 'done' && req.statement_id ? `<div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap">
+        <a class="btn gold" href="#/case/${c.id}/statement/${req.statement_id}">فتح المحضر المستلم</a>
+        <a class="btn ghost" href="#/case/${c.id}/remote/new?st=${req.statement_id}">+ أسئلة إضافية لنفس المحضر</a></div>` : ''}
       ${remoteStopped(req) ? `<div class="hint" style="margin-top:10px">أُوقف الرابط${req.cancelled_at ? ' في ' + esc(fmtWhen(req.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.</div>`
         : `<div style="margin-top:14px"><button class="btn danger" id="rqCancel">إيقاف الرابط الآن</button>
         <div class="hint">بعد الإيقاف تُرفض أي إفادة تصل عن هذا الرابط، ويظهر موقوفًا عند فتحه من جهازك.${req.status === 'done' ? ' الإفادة المستلمة تبقى محضرًا في القضية.' : ''}</div></div>`}
@@ -212,16 +218,25 @@ async function acceptResponse(data) {
   const c = byId('cases', req.case_id);
   let sig = '';
   if (data.sig) { sig = `signatures/sig_${req.case_id}_remote_${Date.now()}.png`; await putFile(sig, await dataURLToBlob(data.sig)); }
-  const st = { id: nextId('statements'), case_id: req.case_id, party_id: req.party_id,
-    statement_date: hijriOf(data.submitted_at), location: 'إفادة إلكترونية عن بُعد',
-    text: req.questions.map((x, i) => `س / ${x.q}\nج / ${data.answers[i] || ''}`).join('\n\n'),
-    signature_path: sig, taker_rank: S().def_taker_rank, taker_name: S().def_taker_name || (c && c.assigned_name) || '',
-    taker_sig_path: S().taker_sig || '', remote: true, remote_at: data.submitted_at, created_at: nowStr() };
-  DB.statements.push(st);
+  const qa = req.questions.map((x, i) => `س / ${x.q}\nج / ${data.answers[i] || ''}`).join('\n\n');
+  const newSigs = req.questions.map(() => sig);   // توقيع الطرف على كل جواب
+  let st = req.append_to && DB.statements.find(s => s.id === req.append_to);
+  if (st) {
+    // أسئلة إضافية: تُلحق بالمحضر نفسه بلا فواصل، والتوقيع الأخير يصير التوقيع الرئيسي
+    const prev = st.answer_sigs || Array(answerCount(st.text)).fill(st.signature_path || '');
+    Object.assign(st, { text: (st.text || '').trimEnd() + '\n\n' + qa, answer_sigs: prev.concat(newSigs), signature_path: sig || st.signature_path });
+  } else {
+    st = { id: nextId('statements'), case_id: req.case_id, party_id: req.party_id,
+      statement_date: hijriOf(data.submitted_at), location: 'إفادة إلكترونية عن بُعد',
+      text: qa, answer_sigs: newSigs,
+      signature_path: sig, taker_rank: S().def_taker_rank, taker_name: S().def_taker_name || (c && c.assigned_name) || '',
+      taker_sig_path: S().taker_sig || '', remote: true, remote_at: data.submitted_at, created_at: nowStr() };
+    DB.statements.push(st);
+  }
   Object.assign(req, { status: 'done', statement_id: st.id, received_at: Date.now() });
-  log('استلام إفادة عن بُعد', 'قضية #' + req.case_id);
+  log(req.append_to ? 'استلام أسئلة إضافية عن بُعد' : 'استلام إفادة عن بُعد', 'قضية #' + req.case_id);
   await save();
-  toast('تم استلام الإفادة وإضافتها محضرًا في القضية');
+  toast(req.append_to ? 'تم استلام الأجوبة وإلحاقها بالمحضر' : 'تم استلام الإفادة وإضافتها محضرًا في القضية');
   location.hash = `#/case/${req.case_id}/statement/${st.id}`;
 }
 
