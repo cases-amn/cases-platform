@@ -78,9 +78,9 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const APP_VERSION = 16;   // يُرفع مع CACHE في sw.js عند كل نشر
-const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
-const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
+const APP_VERSION = 17;   // يُرفع مع CACHE في sw.js عند كل نشر
+const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
+const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
 
 function newUid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2); }
@@ -275,6 +275,11 @@ function route() {
       if (sid === 'new') return viewLetterForm(cs, null, q.get('type'), q.get('party'));
       const lt = DB.letters.find(l => l.id === +sid && l.case_id === cs.id);
       if (lt) return c === 'print' ? viewLetterPrint(cs, lt) : viewLetterForm(cs, lt);
+    }
+    if (b === 'record') {
+      if (sid === 'new') return viewRecordForm(cs, null, q.get('type'), q.get('party'));
+      const rd = DB.records.find(r => r.id === +sid && r.case_id === cs.id);
+      if (rd) return c === 'print' ? viewRecordPrint(cs, rd) : viewRecordForm(cs, rd);
     }
   }
   location.hash = '#/';
@@ -517,6 +522,7 @@ function viewCase(c) {
   const rep = DB.reports.find(r => r.case_id === c.id);
   const letters = DB.letters.filter(l => l.case_id === c.id);
   const reqs = DB.requests.filter(r => r.case_id === c.id);
+  const recs = DB.records.filter(r => r.case_id === c.id);
   const pName = id => (byId('parties', id) || {}).name || '—';
   const pRole = id => (byId('parties', id) || {}).party_role || '';
   shell(`
@@ -527,7 +533,7 @@ function viewCase(c) {
         <a class="btn ghost" href="#/case/${c.id}/edit">تعديل البيانات</a>
         <button class="btn danger" id="delCase">حذف</button></div>
     </div>
-    <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'], ['sRemote', 'طلبات الإفادة (' + reqs.length + ')'],
+    <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'], ['sRemote', 'طلبات الإفادة (' + reqs.length + ')'], ['sRecs', 'محاضر الإجراءات (' + recs.length + ')'],
       ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير'], ['sLetters', 'الخطابات (' + letters.length + ')']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
 
     <div class="card" id="sMain"><h2>البيانات الرئيسية</h2>
@@ -594,6 +600,24 @@ function viewCase(c) {
             ${!remoteStopped(r) ? `<button class="btn sm danger" data-rstop="${r.id}">إيقاف الرابط</button>` : ''}</div></td></tr>`; }).join('')}
       </table>` : '<div class="empty">أرسل للطرف رابطًا بالواتساب فيه أسئلتك، يجيب ويوقّع، ويعيد لك ملف الإفادة فيصير محضرًا في القضية</div>'}
       <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/remote/new">+ طلب إفادة</a></div>
+    </div>
+
+    <div class="card" id="sRecs"><h2>محاضر الإجراءات</h2>
+      ${recs.length ? `<table class="rt">
+        <tr class="hd"><th>م</th><th>المحضر</th><th>الطرف</th><th>التاريخ</th><th></th></tr>
+        ${recs.map((r, i) => `<tr>
+          <td class="nomob">${i + 1}</td>
+          <td data-l="المحضر"><b>${esc(recordTitle(r))}</b></td>
+          <td data-l="الطرف">${r.party_id ? esc(pName(r.party_id)) : (r.place ? esc(r.place) : '—')}</td>
+          <td data-l="التاريخ">${esc(r.record_date || '—')}</td>
+          <td class="actions-cell"><div class="btns">
+            <a class="btn sm" href="#/case/${c.id}/record/${r.id}/print">طباعة</a>
+            <a class="btn sm ghost" href="#/case/${c.id}/record/${r.id}">تعديل</a>
+            <button class="btn sm danger" data-rdel="${r.id}">حذف</button></div></td></tr>`).join('')}
+      </table>` : '<div class="empty">محضر اتصال لمن لم يرد على الاتصال، أو محضر مشاهدة، أو محضر بعنوان تختاره</div>'}
+      <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap">
+        ${Object.entries(RECORD_TYPES).map(([k, t]) => `<a class="btn ghost" href="#/case/${c.id}/record/new?type=${k}">+ ${t.label}</a>`).join('')}
+      </div>
     </div>
 
     <div class="card" id="sAtt"><h2>الخطابات والمرفقات</h2>
@@ -693,6 +717,11 @@ function viewCase(c) {
   });
   $$('[data-lcopy]').forEach(b => b.onclick = () => copyText(byId('letters', b.dataset.lcopy).body.trim(), 'تم نسخ متن الخطاب'));
   $$('[data-rstop]').forEach(b => b.onclick = () => stopRemoteRequest(byId('requests', b.dataset.rstop)));
+  $$('[data-rdel]').forEach(b => b.onclick = async () => {
+    if (!confirm('حذف المحضر؟')) return;
+    DB.records = DB.records.filter(x => x.id !== +b.dataset.rdel);
+    log('حذف محضر', 'قضية #' + c.id); await save(); toast('تم حذف المحضر'); route();
+  });
   $$('[data-ldel]').forEach(b => b.onclick = async () => {
     if (!confirm('حذف الخطاب؟')) return;
     DB.letters = DB.letters.filter(x => x.id !== +b.dataset.ldel);
@@ -1336,6 +1365,147 @@ function viewLetterPrint(c, l) {
   });
 }
 
+// ========================= محاضر الإجراءات (اتصال / مشاهدة / مفتوح) =========================
+const RECORD_TYPES = {
+  call: { label: 'محضر اتصال' },
+  view: { label: 'محضر مشاهدة' },
+  open: { label: 'محضر مفتوح' },
+};
+const CALL_TRIES = ['عدة مرات وفي أوقات مختلفة', 'عدة مرات', 'مرتين في وقتين مختلفين', 'مرة واحدة'];
+const CALL_RESULTS = { noanswer: 'ولم يرد على الاتصال', off: 'وكان الجوال مغلقًا', out: 'وكان الرقم خارج الخدمة' };
+const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const recordTitle = r => (r.type === 'open' ? (r.title || '').trim() : '') || RECORD_TYPES[r.type].label;
+/** على من الشكوى: الاسم إن وُجد، وإلا «أحد منسوبي» الجهة، وإلا شرطة المنطقة */
+function againstText(c) {
+  const df = caseDefendants(c);
+  if (!df.length) return 'أحد منسوبي شرطة المنطقة';
+  return df.map(p => {
+    const f = p.gender === 'أنثى', unit = (p.unit || '').trim();
+    const who = (f ? 'إحدى منسوبات ' : 'أحد منسوبي ') + (unit || 'شرطة المنطقة');
+    if (!(p.name || '').trim()) return who;
+    return `${who} ${p.rank_job ? p.rank_job.replace(/\s*\/\s*$/, '') + '/ ' : ''}${p.name}`;
+  }).join(' و');
+}
+function recordIntro(c) {
+  const cl = DB.parties.filter(x => x.case_id === c.id && x.party_role === 'مدعي');
+  let t = `بناءً على خطاب ${c.order_source || '(      )'} رقم (${c.order_number || '      '}) وتاريخ ${c.order_date ? c.order_date + 'هـ' : '(      )'}`;
+  t += cl.length ? `، بشأن شكوى ${cl.map(partyLabel).join(' و')} على ${againstText(c)}` : `، بشأن الشكوى على ${againstText(c)}`;
+  if (c.subject) t += `، والمتضمنة ${c.subject.trim().replace(/[.،]$/, '')}`;
+  return t + '.';
+}
+function recordBody(c, r) {
+  const p = byId('parties', r.party_id);
+  const by = [r.taker_rank, r.taker_name].map(x => (x || '').trim()).filter(Boolean).join('/ ') || '(      )';
+  const when = `في يوم ${r.day || '(      )'} بتاريخ ${r.record_date ? r.record_date + 'هـ' : '(      )'}، وبمعرفتي أنا ${by}`;
+  let mid;
+  if (r.type === 'call') {
+    const f = p && p.gender === 'أنثى';
+    const who = p ? partyLabel(p) + (p.national_id ? `، ${f ? 'هويتها' : 'هويته'} رقم (${p.national_id})` : '') : '(      )';
+    const res = (CALL_RESULTS[r.result] || CALL_RESULTS.noanswer).replace('يرد', f ? 'ترد' : 'يرد');
+    mid = `${when}، جرى الاتصال على ${who}، على ${f ? 'جوالها' : 'جواله'} رقم (${(p && p.phone) || '      '}) ${r.tries || CALL_TRIES[0]}، ${res}، وذلك لطلب ${f ? 'حضورها' : 'حضوره'} للمراجعة.`;
+  } else if (r.type === 'view') {
+    mid = `${when}، جرى الانتقال إلى ${(r.place || '').trim() || '(      )'}، وبالمشاهدة تبيّن ما يلي:\n(      )`;
+  } else {
+    mid = `${when}، (      )`;
+  }
+  return `${recordIntro(c)}\n\n${mid}\n\nوحفظًا للواقع جرى إعداد هذا المحضر.`;
+}
+function recordDefaults(c, type, partyId) {
+  const ps = DB.parties.filter(p => p.case_id === c.id);
+  const p = byId('parties', partyId) || ps.find(x => x.party_role === 'مدعي') || ps[0] || null;
+  const r = { type, title: '', party_id: p ? p.id : null, record_date: hijriToday(), day: WEEKDAYS[new Date().getDay()],
+    tries: CALL_TRIES[0], result: 'noanswer', place: '',
+    taker_rank: S().def_taker_rank, taker_name: S().def_taker_name || c.assigned_name || '' };
+  r.body = recordBody(c, r);
+  return r;
+}
+
+function viewRecordForm(c, rd, newType, partyId) {
+  if (!rd && !RECORD_TYPES[newType]) { location.hash = '#/case/' + c.id; return; }
+  const v = rd || recordDefaults(c, newType, partyId);
+  const type = v.type, ps = DB.parties.filter(p => p.case_id === c.id);
+  shell(`
+    <div class="page-head"><h1>${esc(RECORD_TYPES[type].label)} <span>— قضية رقم ${esc(c.case_number || c.id)}</span></h1>
+      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
+    <form id="f">
+    <div class="card"><h2>بيانات المحضر</h2>
+      <div class="grid g3">
+        ${type === 'open' ? `<div class="field"><label>عنوان المحضر</label><input type="text" name="title" value="${esc(v.title)}" placeholder="مثال: محضر انتقال / محضر تسليم / محضر ضبط"></div>` : ''}
+        ${type !== 'view' ? `<div class="field"><label>${type === 'call' ? 'الطرف الذي جرى الاتصال عليه' : 'الطرف (اختياري)'}</label><select name="party_id">
+          ${type === 'open' ? '<option value="">—</option>' : ''}
+          ${ps.length || type === 'open' ? ps.map(p => `<option value="${p.id}" ${p.id === +v.party_id ? 'selected' : ''}>${esc(p.party_role)} / ${esc(p.name)}${p.phone ? ' — ' + esc(p.phone) : ''}</option>`).join('')
+            : '<option value="">— أضف الطرف في القضية أولًا —</option>'}</select></div>` : ''}
+        ${type === 'view' ? `<div class="field"><label>مكان المشاهدة</label><input type="text" name="place" value="${esc(v.place)}" placeholder="مثال: موقع الواقعة بحي ... / مقر مركز شرطة ..."></div>` : ''}
+        <div class="field"><label>اليوم</label><select name="day">${opts(WEEKDAYS, v.day)}</select></div>
+        ${dateField('record_date', 'التاريخ (هـ)', v.record_date)}
+        ${type === 'call' ? `<div class="field"><label>عدد مرات الاتصال</label><select name="tries">${opts(CALL_TRIES, v.tries)}</select></div>
+        <div class="field"><label>النتيجة</label><select name="result">${Object.entries(CALL_RESULTS).map(([k, t]) => `<option value="${k}" ${k === v.result ? 'selected' : ''}>${t}</option>`).join('')}</select></div>` : ''}
+      </div>
+      ${type === 'call' ? '<div class="hint" id="phoneHint"></div>' : ''}
+    </div>
+    <div class="card"><h2>نص المحضر <button type="button" class="btn sm ghost count" id="regen">إعادة التوليد</button></h2>
+      <textarea name="body" id="body" class="amiri" style="min-height:260px">${esc(v.body)}</textarea>
+      <div class="hint">يبدأ بمقدمة من بيانات القضية (الخطاب الوارد والشكوى وعلى من)، ويتحدّث مع اختياراتك أعلاه ما لم تعدّله يدويًا. ضع ما تريد مكان (      ).</div>
+    </div>
+    <div class="card"><h2>معد المحضر</h2>
+      <div class="grid g2">
+        <div class="field"><label>الرتبة</label><input type="text" name="taker_rank" value="${esc(v.taker_rank)}" placeholder="عقيد"></div>
+        <div class="field"><label>الاسم</label><input type="text" name="taker_name" value="${esc(v.taker_name)}"></div>
+      </div>
+      <div class="hint">القيمة الافتراضية من الإعدادات (رتبة واسم المحقق).</div>
+    </div>
+    <div class="formbar"><button class="btn gold" type="submit">حفظ</button>
+      <button class="btn ghost" type="submit" data-print="1">حفظ ثم طباعة</button></div>
+    </form>`);
+  const f = $('#f'), body = $('#body');
+  bindToday(f);
+  let autoBody = recordBody(c, Object.assign({}, v)) === v.body ? v.body : null;
+  const cur = () => Object.assign({}, v, formObj(f), { party_id: f.party_id && f.party_id.value ? +f.party_id.value : null });
+  const refresh = () => {
+    const r = cur();
+    if (autoBody !== null && body.value === autoBody) { autoBody = recordBody(c, r); setVal(body, autoBody); }
+    const ph = $('#phoneHint');
+    if (ph) { const p = byId('parties', r.party_id);
+      ph.textContent = p && p.phone ? '' : '⚠ لا يوجد رقم جوال لهذا الطرف — أضفه من «تعديل» في أطراف القضية، أو اكتبه في النص';
+      ph.style.color = 'var(--red)'; }
+  };
+  $$('select, input', f).forEach(el => { el.addEventListener('change', refresh); el.addEventListener('input', refresh); });
+  $$('textarea.line', f).forEach(el => el.addEventListener('input', refresh));
+  refresh();
+  $('#regen').onclick = () => {
+    if (body.value.trim() && body.value !== autoBody && !confirm('استبدال النص الحالي بالصيغة المولّدة؟')) return;
+    autoBody = recordBody(c, cur()); setVal(body, autoBody);
+  };
+  let wantPrint = false;
+  $('[data-print]', f).onclick = () => { wantPrint = true; };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const o = cur();
+    o.body = body.value;
+    let rec = rd;
+    if (!rec) { rec = { id: nextId('records'), case_id: c.id, created_at: nowStr() }; DB.records.push(rec); }
+    Object.assign(rec, o, { updated_at: nowStr() });
+    log(rd ? 'تعديل محضر' : 'إنشاء محضر', recordTitle(rec) + ' — قضية #' + c.id);
+    await save(); toast('تم حفظ المحضر');
+    location.hash = wantPrint ? `#/case/${c.id}/record/${rec.id}/print` : `#/case/${c.id}`;
+  };
+}
+
+function viewRecordPrint(c, r) {
+  const html = `<div class="sheet one" id="sheet"><div class="inner">
+    ${printHead([['القضية رقم :', esc(c.case_number || '')], ['التاريخ :', esc(r.record_date) + (r.record_date ? 'هـ' : '')], ['الموضوع :', esc(recordTitle(r))]])}
+    <div class="ptitle"><span>( ${esc(recordTitle(r))} )</span></div>
+    <div class="lt-body">${esc((r.body || '').trim())}</div>
+    <div class="lt-sig"><div class="t">معد المحضر</div>${rankName(r.taker_rank, r.taker_name)}<div style="margin-top:.6em">التوقيع / ...................</div></div>
+  </div></div>`;
+  const pv = printShell(html, ['#/case/' + c.id + '/record/' + r.id, 'تعديل المحضر'], '@page { size: A4 portrait; margin: 0; }');
+  pv.ready.then(() => {
+    const res = fitOnePage($('#sheet'), 16, 10);
+    $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
+    pv.scaler();
+  });
+}
+
 // ---- صيغ النتيجة والمرئيات ----
 function fillTemplate(c, t) {
   const ps = DB.parties.filter(p => p.case_id === c.id);
@@ -1346,8 +1516,15 @@ function fillTemplate(c, t) {
 }
 
 function buildProcedures(c) {
-  return DB.statements.filter(s => s.case_id === c.id)
-    .map((s, i) => { const p = byId('parties', s.party_id) || {}; return `${i + 1}. سماع أقوال ${roleWord(p.party_role)} / ${p.name || ''}.`; }).join('\n');
+  const lines = DB.statements.filter(s => s.case_id === c.id)
+    .map(s => { const p = byId('parties', s.party_id) || {}; return `سماع أقوال ${roleWord(p.party_role)} / ${p.name || ''}.`; });
+  DB.records.filter(r => r.case_id === c.id).forEach(r => {
+    const p = byId('parties', r.party_id);
+    const why = { off: 'لإغلاق جواله', out: 'لكون رقمه خارج الخدمة' }[r.result] || 'لعدم رده على الاتصال';
+    lines.push(r.type === 'call' && p ? `إعداد محضر اتصال على ${roleWord(p.party_role)} / ${p.name} ${why}.`
+      : `إعداد ${recordTitle(r)}${p ? ` بشأن ${roleWord(p.party_role)} / ${p.name}` : ''}.`);
+  });
+  return lines.map((t, i) => `${i + 1}. ${t}`).join('\n');
 }
 
 function viewReportForm(c) {
@@ -1529,6 +1706,7 @@ function mergeCases(src) {
   remap('attachments'); remap('reports');
   remap('letters', r => ({ party_id: r.party_id ? (map.parties[r.party_id] || null) : null }));
   remap('requests', r => ({ party_id: map.parties[r.party_id] || null, statement_id: r.statement_id ? (map.statements[r.statement_id] || null) : null }));
+  remap('records', r => ({ party_id: r.party_id ? (map.parties[r.party_id] || null) : null }));
   DB.seq.case_no = Math.max(DB.seq.case_no || 0, ...DB.cases.map(caseNoOf), 0);
   return { added, updated };
 }
