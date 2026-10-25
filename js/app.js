@@ -82,7 +82,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 21;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 22;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -944,8 +944,19 @@ function qaHTML(text, sigs) {
   (sigs || []).forEach((p, k) => {
     if (p && k < ai && ends[k] != null) out[ends[k]] = out[ends[k]].trimEnd() + ` <img class="asig" data-file="${esc(p)}" alt="">`;
   });
-  return out.join('\n');
+  return tightLines(out);
 }
+/** نص مطبوع بلا فراغات كبيرة: السطر الفارغ (أو عدة أسطر فارغة) يصير فاصلًا صغيرًا بدل سطر كامل */
+function tightLines(htmlLines) {
+  let s = '', gap = false;
+  htmlLines.forEach(l => {
+    if (!l.trim()) { gap = true; return; }
+    if (s) s += gap ? '<span class="pgap"></span>' : '\n';
+    s += l; gap = false;
+  });
+  return s;
+}
+const tightText = t => tightLines(esc(String(t || '').trim()).split('\n'));
 
 /** السؤال الأول الافتراضي في المحضر حسب صفة الطرف (بياناته الشخصية مطبوعة أصلًا في المحضر) */
 function defaultQuestion(c, p) {
@@ -1570,9 +1581,9 @@ function viewRecordPrint(c, r) {
   const html = `<div class="sheet flow" id="sheet"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number || '')], ['التاريخ :', esc(r.record_date) + (r.record_date ? 'هـ' : '')], ['الموضوع :', esc(recordTitle(r))]])}
     <div class="ptitle"><span>( ${esc(datedTitle(recordTitle(r), r.record_date))} )</span></div>
-    <div class="lt-body">${esc((r.body || '').trim())}</div>
-    <div class="lt-sig"><div class="t">معد المحضر</div>${rankName(r.taker_rank, r.taker_name)}
-      <div style="margin-top:.6em">التوقيع /${sig ? '' : ' ...................'}</div>
+    <div class="lt-body tight">${tightText(r.body)}</div>
+    <div class="lt-sig rec-sig"><div class="t">معد المحضر</div>${rankName(r.taker_rank, r.taker_name)}
+      <div style="margin-top:.25em">التوقيع /${sig ? '' : ' ...................'}</div>
       ${sig ? `<img class="sigimg" data-file="${esc(sig)}" alt="">` : ''}</div>
   </div></div>`;
   // اسم الملف: نوع المحضر - الشخص الذي يخصه (أو مكان المشاهدة، أو المدعي)
