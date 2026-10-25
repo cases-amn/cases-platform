@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const APP_VERSION = 13;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 14;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;

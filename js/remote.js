@@ -9,22 +9,43 @@ const REMOTE_EXPIRY = [[6, '6 ساعات'], [24, 'يوم واحد'], [72, '3 أ�
 // ---- ترميز بيانات الطلب داخل الرابط (مضغوطة) ----
 function b64url(u8) { let s = ''; for (const b of u8) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 function unb64url(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
-async function packPayload(obj) {
-  const bytes = new TextEncoder().encode(JSON.stringify(obj));
-  if (typeof CompressionStream === 'function') {
-    const st = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-    return 'z' + b64url(new Uint8Array(await new Response(st).arrayBuffer()));
+// الحروف العربية (U+0600–U+067E) تُرمَّز ببايت واحد بدل اثنين قبل الضغط، فيقصر الرابط
+function arEncode(s) {
+  const out = [];
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (c < 0x80) out.push(c);
+    else if (c >= 0x600 && c < 0x67F) out.push(0x80 + c - 0x600);
+    else for (const u of ch.split('')) { const k = u.charCodeAt(0); out.push(0xFF, k >> 8, k & 0xFF); }   // غير ذلك: 0xFF + وحدة UTF-16
   }
-  return 'j' + b64url(bytes);
+  return Uint8Array.from(out);
 }
+function arDecode(b) {
+  let s = '';
+  for (let i = 0; i < b.length; i++) {
+    const x = b[i];
+    if (x < 0x80) s += String.fromCharCode(x);
+    else if (x < 0xFF) s += String.fromCharCode(0x600 + x - 0x80);
+    else { s += String.fromCharCode((b[i + 1] << 8) | b[i + 2]); i += 2; }
+  }
+  return s;
+}
+const zip = async (u8, ts) => new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(ts)).arrayBuffer());
+async function packPayload(obj) {
+  const json = JSON.stringify(obj);
+  if (typeof CompressionStream === 'function') return 'a' + b64url(await zip(arEncode(json), new CompressionStream('deflate-raw')));
+  return 'j' + b64url(new TextEncoder().encode(json));
+}
+/** a: ترميز عربي + ضغط (الإصدار الحالي)، z: ضغط فقط، j: بلا ضغط (روابط قديمة) */
 async function unpackPayload(s) {
   let bytes = unb64url(s.slice(1));
-  if (s[0] === 'z') {
-    const st = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    bytes = new Uint8Array(await new Response(st).arrayBuffer());
-  }
+  if (s[0] === 'a') return JSON.parse(arDecode(await zip(bytes, new DecompressionStream('deflate-raw'))));
+  if (s[0] === 'z') bytes = await zip(bytes, new DecompressionStream('deflate-raw'));
   return JSON.parse(new TextDecoder().decode(bytes));
 }
+// معرّف الطلب (UUID) بـ 22 خانة بدل 36
+const uuidPack = u => b64url(Uint8Array.from(u.replace(/-/g, '').match(/../g), h => parseInt(h, 16)));
+const uuidUnpack = s => { const h = Array.from(unb64url(s), b => b.toString(16).padStart(2, '0')).join(''); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`; };
 function hijriOf(ms) {
   try {
     const p = {};
@@ -40,11 +61,19 @@ function fmtWhen(ms) {
 const remoteBase = () => location.origin + location.pathname;
 async function remoteLink(req) {
   const c = byId('cases', req.case_id) || {}, p = byId('parties', req.party_id) || {};
-  return remoteBase() + '#/r/' + await packPayload({
-    v: 1, rid: req.rid, exp: req.expires_at, name: p.name || '', intro: req.intro || '',
-    q: req.questions, ch: req.code ? await sha256(req.rid + req.code) : '',
-    org: [S().org_line4, S().org_line5].filter(Boolean), no: c.case_number || '',
-  });
+  // الإصدار 2: مفاتيح قصيرة، والمهلة بالدقائق، و12 خانة من بصمة الرمز تكفي لرمز من 4 أرقام
+  const o = { v: 2, r: /^[0-9a-f-]{36}$/i.test(req.rid) ? uuidPack(req.rid) : req.rid, e: Math.ceil(req.expires_at / 60000),
+    n: p.name || '', i: req.intro || '', q: req.questions.map(x => x.t === 'choice' ? [x.q, x.o] : x.t === 'yesno' ? [x.q, 1] : [x.q]) };
+  if (req.code) o.c = (await sha256(req.rid + req.code)).slice(0, 12);
+  if (c.case_number) o.no = c.case_number;
+  return remoteBase() + '#/r/' + await packPayload(o);
+}
+/** يحوّل بيانات الرابط (أي إصدار) إلى الشكل الموحد */
+function remotePayload(P) {
+  if (!P || P.v !== 2) return P;
+  return { v: 2, rid: P.r.length === 22 ? uuidUnpack(P.r) : P.r, exp: P.e * 60000, name: P.n || '', intro: P.i || '',
+    q: (P.q || []).map(([q, x]) => Array.isArray(x) ? { q, t: 'choice', o: x } : x === 1 ? { q, t: 'yesno' } : { q, t: 'text' }),
+    ch: P.c || '', org: [], no: P.no || '' };
 }
 /** موقوف يدويًا: طلب ملغى قبل الاستلام، أو طلب مستلم أوقفه المحقق بعد ذلك (يبقى محضره) */
 const remoteStopped = r => r.status === 'cancelled' || !!r.stopped;
@@ -154,7 +183,12 @@ async function viewRemoteRequest(c, req) {
   const p = byId('parties', req.party_id) || {};
   const [stTxt, stCls] = remoteStatus(req);
   const link = await remoteLink(req);
-  const msg = `السلام عليكم ${p.name ? 'الأخ/ ' + p.name : ''}\nنأمل تعبئة طلب الإفادة الخاص بكم والتوقيع عليه ثم إرساله عبر الرابط التالي:\n${link}\n\nصلاحية الرابط حتى ${fmtWhen(req.expires_at)}، ويُستخدم مرة واحدة فقط.`;
+  // العبارة أولًا ثم الرابط وحده في سطر (الواتساب لا يدعم إخفاء الرابط خلف نص)
+  const msg = [`السلام عليكم ${p.name ? 'الأخ/ ' + p.name : ''}`.trim(),
+    `${req.append_to ? 'للإجابة على أسئلة إضافية' : 'لتقديم إفادتك'}${c.case_number ? ` في القضية رقم (${c.case_number})` : ''}، اضغط على الرابط التالي 👇`,
+    '', link, '',
+    `⏳ صلاحية الرابط حتى ${fmtWhen(req.expires_at)}، ويُستخدم مرة واحدة فقط.`,
+    req.code ? '🔒 رمز الدخول يصلك في رسالة منفصلة.' : ''].filter((l, i, a) => l || (i > 0 && a[i - 1])).join('\n').trim();
   const wa = `https://wa.me/${waNumber(p.phone)}?text=${encodeURIComponent(msg)}`;
   const open = req.status === 'pending' && !remoteStopped(req) && Date.now() <= req.expires_at;
   shell(`
@@ -263,7 +297,7 @@ async function ownRequest(rid) {
 
 async function viewRemote() {
   let P;
-  try { P = await unpackPayload(location.hash.slice(4)); if (!P || !P.rid || !Array.isArray(P.q)) throw 0; }
+  try { P = remotePayload(await unpackPayload(location.hash.slice(4))); if (!P || !P.rid || !Array.isArray(P.q)) throw 0; }
   catch (e) { return remoteMessage('الرابط غير صالح', 'تأكد من فتح الرابط كاملًا كما وصلك.'); }
   const doneKey = 'remote_done_' + P.rid, triesKey = 'remote_tries_' + P.rid;
   // على جهاز المحقق نفسه: الرابط يتبع حالة الطلب في بياناته (مستلم / موقوف / منتهٍ)
@@ -288,7 +322,8 @@ function remoteCode(P, triesKey) {
   $('#cf').onsubmit = async e => {
     e.preventDefault();
     const code = formObj(e.target).code;
-    if (await sha256(P.rid + code) === P.ch) { sessionStorage.setItem('remote_ok_' + P.rid, '1'); viewRemote(); }
+    // الروابط الجديدة تحمل جزءًا من البصمة، والقديمة كاملها
+    if ((await sha256(P.rid + code)).startsWith(P.ch)) { sessionStorage.setItem('remote_ok_' + P.rid, '1'); viewRemote(); }
     else { lsSet(triesKey, String(tries + 1)); toast('رمز غير صحيح', 'error'); remoteCode(P, triesKey); }
   };
 }
