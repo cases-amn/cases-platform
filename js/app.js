@@ -51,6 +51,9 @@ const ICON = {
 };
 
 // ========================= البيانات =========================
+const TPL_WAIVE = { name: 'تنازل المدعي (حفظ)',
+  result: 'بعد الاطلاع على كامل أوراق المعاملة، جرى الاتصال على {المدعي} لطلب الحضور للمراجعة، وأفاد بعدم رغبته بالمراجعة وتنازله عن مواصلة الدعوى وعدم رغبته بالحضور، حسب محضر الاتصال المرفق.',
+  opinion: 'حفظ الشكوى لتنازل المدعي عن مواصلة الدعوى وعدم رغبته بالحضور.' };
 const DEFAULT_SETTINGS = {
   org_line1: 'المملكة العربية السعودية',
   org_line2: 'وزارة الداخلية',
@@ -76,9 +79,10 @@ const DEFAULT_SETTINGS = {
     { name: 'ثبوت الإساءة (إدانة)',
       result: 'بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، ثبت قيام رجل الأمن {المدعى عليه} بإساءة استخدام السلطة تجاه {المدعي}.',
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
+    TPL_WAIVE,
   ],
 };
-const APP_VERSION = 17;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 18;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -92,6 +96,11 @@ function shapeDB(d) {
   for (const c of d.cases) if (!c.uid) c.uid = newUid();
   d.seq.case_no = Math.max(d.seq.case_no || 0, ...d.cases.map(c => /^\d+$/.test(String(c.case_number || '').trim()) ? +c.case_number : 0), 0);
   d.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
+  // صيغة «تنازل المدعي» تُضاف مرة واحدة لمن حفظ صيغه قبل وجودها (ولا تعود إن حذفها)
+  if (!d.settings.tpl_waive_added) {
+    if (!d.settings.report_templates.some(t => t.name === TPL_WAIVE.name)) d.settings.report_templates = [...d.settings.report_templates, Object.assign({}, TPL_WAIVE)];
+    d.settings.tpl_waive_added = true;
+  }
   d.log = Array.isArray(d.log) ? d.log : [];
   // المحاضر الواردة برابط الإفادة كانت تُحفظ بمكان «إفادة إلكترونية عن بُعد»: تأخذ المكان الافتراضي
   for (const s of d.statements) if (s.location === 'إفادة إلكترونية عن بُعد') s.location = d.settings.def_location;
@@ -1372,7 +1381,15 @@ const RECORD_TYPES = {
   open: { label: 'محضر مفتوح' },
 };
 const CALL_TRIES = ['عدة مرات وفي أوقات مختلفة', 'عدة مرات', 'مرتين في وقتين مختلفين', 'مرة واحدة'];
-const CALL_RESULTS = { noanswer: 'ولم يرد على الاتصال', off: 'وكان الجوال مغلقًا', out: 'وكان الرقم خارج الخدمة' };
+const CALL_RESULTS = { noanswer: 'ولم يرد على الاتصال', off: 'وكان الجوال مغلقًا', out: 'وكان الرقم خارج الخدمة',
+  waive: 'رد وأفاد بتنازله وعدم رغبته بالحضور' };
+/** سطر محضر الاتصال في «الإجراءات» بتقرير تقييم القضية */
+function callProcLine(r, p) {
+  const f = p.gender === 'أنثى', who = `${roleWord(p.party_role)} / ${p.name}`;
+  if (r.result === 'waive') return `إعداد محضر اتصال على ${who}، ${f ? 'وأفادت بعدم رغبتها' : 'وأفاد بعدم رغبته'} بالمراجعة و${f ? 'تنازلها' : 'تنازله'} عن مواصلة الدعوى وعدم ${f ? 'رغبتها' : 'رغبته'} بالحضور.`;
+  const why = { off: `لإغلاق ${f ? 'جوالها' : 'جواله'}`, out: `لكون ${f ? 'رقمها' : 'رقمه'} خارج الخدمة` }[r.result] || `لعدم ${f ? 'ردها' : 'رده'} على الاتصال`;
+  return `إعداد محضر اتصال على ${who} ${why}.`;
+}
 const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 const recordTitle = r => (r.type === 'open' ? (r.title || '').trim() : '') || RECORD_TYPES[r.type].label;
 /** على من الشكوى: الاسم إن وُجد، وإلا «أحد منسوبي» الجهة، وإلا شرطة المنطقة */
@@ -1401,8 +1418,15 @@ function recordBody(c, r) {
   if (r.type === 'call') {
     const f = p && p.gender === 'أنثى';
     const who = p ? partyLabel(p) + (p.national_id ? `، ${f ? 'هويتها' : 'هويته'} رقم (${p.national_id})` : '') : '(      )';
-    const res = (CALL_RESULTS[r.result] || CALL_RESULTS.noanswer).replace('يرد', f ? 'ترد' : 'يرد');
-    mid = `${when}، جرى الاتصال على ${who}، على ${f ? 'جوالها' : 'جواله'} رقم (${(p && p.phone) || '      '}) ${r.tries || CALL_TRIES[0]}، ${res}، وذلك لطلب ${f ? 'حضورها' : 'حضوره'} للمراجعة.`;
+    const phone = `على ${f ? 'جوالها' : 'جواله'} رقم (${(p && p.phone) || '      '})`;
+    if (r.result === 'waive') {
+      mid = `${when}، جرى الاتصال على ${who}، ${phone}، لطلب ${f ? 'حضورها' : 'حضوره'} للمراجعة، ` +
+        (f ? 'فردّت على الاتصال وأفادت بأنها لا ترغب بالمراجعة، وأنها متنازلة عن مواصلة الدعوى ولا ترغب بالحضور.'
+           : 'فردّ على الاتصال وأفاد بأنه لا يرغب بالمراجعة، وأنه متنازل عن مواصلة الدعوى ولا يرغب بالحضور.');
+    } else {
+      const res = (CALL_RESULTS[r.result] || CALL_RESULTS.noanswer).replace('يرد', f ? 'ترد' : 'يرد');
+      mid = `${when}، جرى الاتصال على ${who}، ${phone} ${r.tries || CALL_TRIES[0]}، ${res}، وذلك لطلب ${f ? 'حضورها' : 'حضوره'} للمراجعة.`;
+    }
   } else if (r.type === 'view') {
     mid = `${when}، جرى الانتقال إلى ${(r.place || '').trim() || '(      )'}، وبالمشاهدة تبيّن ما يلي:\n(      )`;
   } else {
@@ -1438,7 +1462,7 @@ function viewRecordForm(c, rd, newType, partyId) {
         ${type === 'view' ? `<div class="field"><label>مكان المشاهدة</label><input type="text" name="place" value="${esc(v.place)}" placeholder="مثال: موقع الواقعة بحي ... / مقر مركز شرطة ..."></div>` : ''}
         <div class="field"><label>اليوم</label><select name="day">${opts(WEEKDAYS, v.day)}</select></div>
         ${dateField('record_date', 'التاريخ (هـ)', v.record_date)}
-        ${type === 'call' ? `<div class="field"><label>عدد مرات الاتصال</label><select name="tries">${opts(CALL_TRIES, v.tries)}</select></div>
+        ${type === 'call' ? `<div class="field" id="triesF"><label>عدد مرات الاتصال</label><select name="tries">${opts(CALL_TRIES, v.tries)}</select></div>
         <div class="field"><label>النتيجة</label><select name="result">${Object.entries(CALL_RESULTS).map(([k, t]) => `<option value="${k}" ${k === v.result ? 'selected' : ''}>${t}</option>`).join('')}</select></div>` : ''}
       </div>
       ${type === 'call' ? '<div class="hint" id="phoneHint"></div>' : ''}
@@ -1464,6 +1488,7 @@ function viewRecordForm(c, rd, newType, partyId) {
   const refresh = () => {
     const r = cur();
     if (autoBody !== null && body.value === autoBody) { autoBody = recordBody(c, r); setVal(body, autoBody); }
+    const tf = $('#triesF'); if (tf) tf.style.display = r.result === 'waive' ? 'none' : '';
     const ph = $('#phoneHint');
     if (ph) { const p = byId('parties', r.party_id);
       ph.textContent = p && p.phone ? '' : '⚠ لا يوجد رقم جوال لهذا الطرف — أضفه من «تعديل» في أطراف القضية، أو اكتبه في النص';
@@ -1485,8 +1510,9 @@ function viewRecordForm(c, rd, newType, partyId) {
     let rec = rd;
     if (!rec) { rec = { id: nextId('records'), case_id: c.id, created_at: nowStr() }; DB.records.push(rec); }
     Object.assign(rec, o, { updated_at: nowStr() });
+    const inRep = syncReportProc(c, rec);
     log(rd ? 'تعديل محضر' : 'إنشاء محضر', recordTitle(rec) + ' — قضية #' + c.id);
-    await save(); toast('تم حفظ المحضر');
+    await save(); toast(inRep ? 'تم حفظ المحضر وإدراجه في إجراءات التقرير' : 'تم حفظ المحضر');
     location.hash = wantPrint ? `#/case/${c.id}/record/${rec.id}/print` : `#/case/${c.id}`;
   };
 }
@@ -1520,11 +1546,26 @@ function buildProcedures(c) {
     .map(s => { const p = byId('parties', s.party_id) || {}; return `سماع أقوال ${roleWord(p.party_role)} / ${p.name || ''}.`; });
   DB.records.filter(r => r.case_id === c.id).forEach(r => {
     const p = byId('parties', r.party_id);
-    const why = { off: 'لإغلاق جواله', out: 'لكون رقمه خارج الخدمة' }[r.result] || 'لعدم رده على الاتصال';
-    lines.push(r.type === 'call' && p ? `إعداد محضر اتصال على ${roleWord(p.party_role)} / ${p.name} ${why}.`
-      : `إعداد ${recordTitle(r)}${p ? ` بشأن ${roleWord(p.party_role)} / ${p.name}` : ''}.`);
+    lines.push(recordProcLine(r));
   });
   return lines.map((t, i) => `${i + 1}. ${t}`).join('\n');
+}
+function recordProcLine(r) {
+  const p = byId('parties', r.party_id);
+  return r.type === 'call' && p ? callProcLine(r, p) : `إعداد ${recordTitle(r)}${p ? ` بشأن ${roleWord(p.party_role)} / ${p.name}` : ''}.`;
+}
+/** إن كان التقرير مُعدًّا: يُدرج سطر المحضر في «الإجراءات» (ويُستبدل سطره السابق إن تغيّر) */
+function syncReportProc(c, rec) {
+  const rep = DB.reports.find(x => x.case_id === c.id);
+  const line = recordProcLine(rec), old = rec.proc_line;
+  rec.proc_line = line;
+  if (!rep) return false;
+  const txt = rep.procedures_text || '';
+  if (old && old !== line && txt.includes(old)) { rep.procedures_text = txt.split(old).join(line); return true; }
+  if (txt.includes(line)) return false;
+  const n = txt.split('\n').filter(l => /^\s*\d+\s*[.\-)]/.test(l)).length;
+  rep.procedures_text = (txt.trim() ? txt.replace(/\s+$/, '') + '\n' : '') + `${n + 1}. ${line}`;
+  return true;
 }
 
 function viewReportForm(c) {
