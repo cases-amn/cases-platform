@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const APP_VERSION = 11;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 12;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;
@@ -140,8 +140,22 @@ function safeName(n) { return (n || 'file').replace(/[\\/:*?"<>|\s]+/g, '_').sli
 // ========================= البداية =========================
 const app = () => $('#app');
 
+function updateBar() {
+  if ($('#updBar')) return;
+  const b = document.createElement('div');
+  b.id = 'updBar'; b.className = 'updbar';
+  b.innerHTML = 'يوجد تحديث جديد للمنصة <button class="btn sm gold" style="margin-inline-start:10px">تحديث الآن</button>';
+  b.querySelector('button').onclick = () => location.reload();
+  document.body.appendChild(b);
+}
+
 async function boot() {
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    const hadSW = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+    // وصل إصدار جديد أثناء فتح الصفحة: زر لإعادة التحميل (لا إعادة تلقائية حتى لا يضيع ما يُكتب)
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadSW) updateBar(); });
+  }
   if (location.hash.startsWith('#/r/')) return viewRemote();   // صفحة المجيب على طلب الإفادة
   let st;
   try { st = await Store.init(); } catch (e) { st = 'choose'; }

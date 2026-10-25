@@ -122,7 +122,7 @@ tr.clickable { cursor: pointer; }
 .badge.n { background: #e6eae7; color: #1f2a24; }
 
 /* ---------- التنبيهات ---------- */
-.toast {
+.toast, .updbar {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--navh) + 18px); z-index: 300;
   padding: 12px 20px; border-radius: 10px; font-size: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
   background: var(--green-dark); color: #fff; max-width: calc(100vw - 32px); text-align: center;
@@ -283,11 +283,12 @@ tr.clickable { cursor: pointer; }
 
   .modal-bg { align-items: flex-end; padding: 0; }
   .modal { border-radius: 18px 18px 0 0; max-height: 92vh; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
-  .toast { bottom: calc(var(--navh) + 80px); }
+  .toast, .updbar { bottom: calc(var(--navh) + 80px); }
 }
 .tplitem { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: #fbfcfb; }
 body.remote { padding-bottom: 0 !important; }
 
 /* كل نصوص الواجهة بالخط العريض — في آخر الملف ليغلب الأوزان الأخف أعلاه (التقارير المطبوعة لها خطها في print.css) */
 .btn, input, select, textarea, textarea.amiri, th, td, .badge, .sigmode, .hint, .muted, .choice span, .kpi .l,
-.topbar nav a, .topbar .brand .tag, .bottomnav a, .jump button, .pinfo b, .note, .toast { font-weight: 700; }
+.topbar nav a, .topbar .brand .tag, .bottomnav a, .jump button, .pinfo b, .note, .toast, .updbar { font-weight: 700; }
+.updbar { z-index: 310; display: flex; align-items: center; justify-content: center; }
