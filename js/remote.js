@@ -46,9 +46,11 @@ async function remoteLink(req) {
     org: [S().org_line4, S().org_line5].filter(Boolean), no: c.case_number || '',
   });
 }
+/** موقوف يدويًا: طلب ملغى قبل الاستلام، أو طلب مستلم أوقفه المحقق بعد ذلك (يبقى محضره) */
+const remoteStopped = r => r.status === 'cancelled' || !!r.stopped;
 function remoteStatus(r) {
+  if (remoteStopped(r)) return [r.status === 'done' ? 'مستلم — موقوف' : 'موقوف', 'n'];
   if (r.status === 'done') return ['تم الاستلام', 'st-منجزة'];
-  if (r.status === 'cancelled') return ['موقوف', 'n'];
   if (Date.now() > r.expires_at) return ['انتهت المهلة', 'n'];
   return ['بانتظار الرد', 'st-جارية'];
 }
@@ -150,7 +152,7 @@ async function viewRemoteRequest(c, req) {
   const link = await remoteLink(req);
   const msg = `السلام عليكم ${p.name ? 'الأخ/ ' + p.name : ''}\nنأمل تعبئة طلب الإفادة الخاص بكم والتوقيع عليه ثم إرساله عبر الرابط التالي:\n${link}\n\nصلاحية الرابط حتى ${fmtWhen(req.expires_at)}، ويُستخدم مرة واحدة فقط.`;
   const wa = `https://wa.me/${waNumber(p.phone)}?text=${encodeURIComponent(msg)}`;
-  const open = req.status === 'pending' && Date.now() <= req.expires_at;
+  const open = req.status === 'pending' && !remoteStopped(req) && Date.now() <= req.expires_at;
   shell(`
     <div class="page-head"><h1>طلب <span>إفادة عن بُعد</span> — ${esc(p.name || '')}</h1>
       <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
@@ -162,10 +164,9 @@ async function viewRemoteRequest(c, req) {
         <div><label>عدد الأسئلة</label><div>${req.questions.length}</div></div>
       </div>
       ${req.status === 'done' && req.statement_id ? `<div style="margin-top:14px"><a class="btn gold" href="#/case/${c.id}/statement/${req.statement_id}">فتح المحضر المستلم</a></div>` : ''}
-      ${req.status === 'done' ? '<div class="hint" style="margin-top:10px">الرابط مقفل تلقائيًا بعد الاستلام، ولا تُقبل عنه إفادة ثانية.</div>' : ''}
-      ${req.status === 'cancelled' ? `<div class="hint" style="margin-top:10px">أُوقف الرابط${req.cancelled_at ? ' في ' + esc(fmtWhen(req.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.</div>` : ''}
-      ${req.status === 'pending' ? `<div style="margin-top:14px"><button class="btn danger" id="rqCancel">إيقاف الرابط الآن</button>
-        <div class="hint">بعد الإيقاف تُرفض أي إفادة تصل عن هذا الرابط، ويظهر مقفلًا عند فتحه من جهازك.</div></div>` : ''}
+      ${remoteStopped(req) ? `<div class="hint" style="margin-top:10px">أُوقف الرابط${req.cancelled_at ? ' في ' + esc(fmtWhen(req.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.</div>`
+        : `<div style="margin-top:14px"><button class="btn danger" id="rqCancel">إيقاف الرابط الآن</button>
+        <div class="hint">بعد الإيقاف تُرفض أي إفادة تصل عن هذا الرابط، ويظهر موقوفًا عند فتحه من جهازك.${req.status === 'done' ? ' الإفادة المستلمة تبقى محضرًا في القضية.' : ''}</div></div>`}
     </div>
     ${open ? `<div class="card"><h2>الإرسال</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
@@ -174,7 +175,7 @@ async function viewRemoteRequest(c, req) {
       ${req.code ? `<div class="note" style="margin-top:12px">رمز الدخول: <b style="font-size:20px; letter-spacing:4px">${esc(req.code)}</b>
         — أرسله له في رسالة منفصلة أو أخبره به بالاتصال. <button class="btn sm ghost" id="cpCode">نسخ الرمز</button></div>` : ''}
     </div>` : ''}
-    ${req.status === 'pending' ? `<div class="card"><h2>استلام الإفادة</h2>
+    ${req.status === 'pending' && !remoteStopped(req) ? `<div class="card"><h2>استلام الإفادة</h2>
       <div class="hint" style="margin-bottom:10px">بعد أن يرسل لك ملف الإفادة على الواتساب احفظه، ثم اختره هنا لإضافته محضرًا في القضية.</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
         <label class="btn" style="margin:0">اختيار ملف الإفادة<input type="file" id="rsFile" accept=".txt,.json,text/plain,application/json" hidden></label></div></div>` : ''}
@@ -189,7 +190,7 @@ async function viewRemoteRequest(c, req) {
 }
 async function stopRemoteRequest(req) {
   if (!confirm('إيقاف الرابط؟ لن تُقبل أي إفادة تصل عنه بعد الآن.')) return;
-  Object.assign(req, { status: 'cancelled', cancelled_at: Date.now() });
+  Object.assign(req, req.status === 'done' ? { stopped: true, cancelled_at: Date.now() } : { status: 'cancelled', cancelled_at: Date.now() });
   log('إيقاف رابط إفادة عن بُعد', 'قضية #' + req.case_id); await save(); toast('تم إيقاف الرابط'); route();
 }
 
@@ -203,8 +204,8 @@ async function importResponseFile(file) {
 async function acceptResponse(data) {
   const req = DB.requests.find(r => r.rid === data.rid);
   if (!req) return toast('هذه الإفادة لا تخص أي طلب في بياناتك', 'error');
+  if (remoteStopped(req)) return toast('هذا الرابط موقوف — لا تُقبل الإفادة', 'error');
   if (req.status === 'done') return toast('سبق استلام إفادة لهذا الطلب — الرابط مقفل ولا تُقبل إفادة ثانية', 'error');
-  if (req.status === 'cancelled') return toast('هذا الطلب ملغى — لا تُقبل الإفادة', 'error');
   if (!Array.isArray(data.answers) || data.answers.length !== req.questions.length) return toast('ملف الإفادة لا يطابق أسئلة الطلب', 'error');
   if (data.submitted_at > req.expires_at &&
       !confirm(`أُرسلت هذه الإفادة بعد انتهاء المهلة (${fmtWhen(data.submitted_at)}). قبولها رغم ذلك؟`)) return;
@@ -252,8 +253,8 @@ async function viewRemote() {
   const doneKey = 'remote_done_' + P.rid, triesKey = 'remote_tries_' + P.rid;
   // على جهاز المحقق نفسه: الرابط يتبع حالة الطلب في بياناته (مستلم / موقوف / منتهٍ)
   const own = await ownRequest(P.rid);
+  if (own && remoteStopped(own)) return remoteMessage('الرابط موقوف', `أوقفتَ هذا الرابط${own.cancelled_at ? ' في ' + esc(fmtWhen(own.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.`);
   if (own && own.status === 'done') return remoteMessage('الرابط مقفل', `تم استلام الإفادة عن هذا الطلب${own.received_at ? ' في ' + esc(fmtWhen(own.received_at)) : ''}، ولا يقبل الرابط إفادة أخرى.`);
-  if (own && own.status === 'cancelled') return remoteMessage('الرابط موقوف', `أوقفتَ هذا الرابط${own.cancelled_at ? ' في ' + esc(fmtWhen(own.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.`);
   const done = lsGet(doneKey, '');
   if (done) return remoteDone(P, done);
   if (Date.now() > P.exp) return remoteMessage('انتهت صلاحية الرابط', `انتهت مهلة هذا الطلب في ${esc(fmtWhen(P.exp))}.<br>تواصل مع المحقق لطلب رابط جديد.`);

@@ -78,6 +78,7 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
+const APP_VERSION = 11;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;
@@ -507,7 +508,7 @@ function viewCase(c) {
           <td data-l="ينتهي">${esc(fmtWhen(r.expires_at))}</td>
           <td data-l="الحالة"><span class="badge ${cls}">${t}</span></td>
           <td class="actions-cell"><div class="btns"><a class="btn sm" href="#/case/${c.id}/remote/${r.id}">فتح</a>
-            ${r.status === 'pending' ? `<button class="btn sm danger" data-rstop="${r.id}">إيقاف الرابط</button>` : ''}</div></td></tr>`; }).join('')}
+            ${!remoteStopped(r) ? `<button class="btn sm danger" data-rstop="${r.id}">إيقاف الرابط</button>` : ''}</div></td></tr>`; }).join('')}
       </table>` : '<div class="empty">أرسل للطرف رابطًا بالواتساب فيه أسئلتك، يجيب ويوقّع، ويعيد لك ملف الإفادة فيصير محضرًا في القضية</div>'}
       <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/remote/new">+ طلب إفادة عن بُعد</a></div>
     </div>
@@ -1577,7 +1578,8 @@ function viewSettings() {
     <div class="card"><h2>سجل الحركات</h2>
       <div style="max-height:340px; overflow:auto">${DB.log.length ? `<table class="rt"><tr class="hd"><th>الوقت</th><th>الإجراء</th><th>التفاصيل</th></tr>
         ${DB.log.slice(0, 150).map(l => `<tr><td data-l="الوقت" class="muted">${esc(l.ts)}</td><td data-l="الإجراء">${esc(l.action)}</td><td data-l="التفاصيل" class="muted">${esc(l.details)}</td></tr>`).join('')}</table>`
-        : '<div class="empty">لا توجد حركات مسجلة</div>'}</div></div>`, 'settings');
+        : '<div class="empty">لا توجد حركات مسجلة</div>'}</div></div>
+    <div class="hint" style="text-align:center; margin-bottom:24px">إصدار الواجهة: ${APP_VERSION}</div>`, 'settings');
 
   const f = $('#f');
   f.onsubmit = async e => {
