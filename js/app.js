@@ -39,6 +39,11 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 const roleWord = r => r === 'مدعي' ? 'المدعي' : (r === 'مدعى عليه' ? 'المدعى عليه' : 'الشاهد');
+/** صفة الطرف حسب جنسه: المدعي/المدعية، المدعى عليه/المدعى عليها، الشاهد/الشاهدة */
+const roleOf = p => {
+  const f = (p || {}).gender === 'أنثى', r = (p || {}).party_role;
+  return r === 'مدعي' ? (f ? 'المدعية' : 'المدعي') : r === 'مدعى عليه' ? (f ? 'المدعى عليها' : 'المدعى عليه') : (f ? 'الشاهدة' : 'الشاهد');
+};
 const STATUSES = ['جارية', 'منجزة', 'مرفوعة'];
 const ROLES = ['مدعي', 'مدعى عليه', 'شاهد'];
 const RESULTS = ['حفظ الشكوى لعدم ثبوت ما يستوجب الاستمرار فيها', 'ثبوت إساءة استخدام السلطة', 'إحالة لجهة الاختصاص', 'أخرى'];
@@ -82,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 22;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 23;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -278,7 +283,7 @@ function route() {
     if (b === 'statement') {
       if (sid === 'new') return viewStatementForm(cs, null, q.get('party'));
       const st = DB.statements.find(s => s.id === +sid && s.case_id === cs.id);
-      if (st) return c === 'print' ? viewStatementPrint(cs, st) : viewStatementForm(cs, st);
+      if (st) return c === 'print' ? viewStatementPrint(cs, st) : c === 'view' ? viewStatementShow(cs, st) : viewStatementForm(cs, st);
     }
     if (b === 'remote') {
       if (sid === 'new') return viewRemoteRequestForm(cs, q.get('party'), q.get('st'));
@@ -293,7 +298,7 @@ function route() {
     if (b === 'record') {
       if (sid === 'new') return viewRecordForm(cs, null, q.get('type'), q.get('party'));
       const rd = DB.records.find(r => r.id === +sid && r.case_id === cs.id);
-      if (rd) return c === 'print' ? viewRecordPrint(cs, rd) : viewRecordForm(cs, rd);
+      if (rd) return c === 'print' ? viewRecordPrint(cs, rd) : c === 'view' ? viewRecordShow(cs, rd) : viewRecordForm(cs, rd);
     }
   }
   location.hash = '#/';
@@ -379,8 +384,23 @@ const isTypingEl = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'IN
 document.addEventListener('focusin', e => { if (isTypingEl(e.target)) document.body.classList.add('typing'); });
 document.addEventListener('focusout', () => setTimeout(() => { if (!isTypingEl(document.activeElement)) document.body.classList.remove('typing'); }, 60));
 
+// زر «رجوع»: يعود للخطوة السابقة داخل المنصة، وإن فُتحت الصفحة مباشرة يصعد للصفحة الأعلى (ملف القضية ثم القائمة)
+let navDepth = 0;
+window.addEventListener('hashchange', () => { navDepth++; });
+function parentHash() {
+  const p = location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
+  return p[0] === 'case' && p.length > 2 ? `#/case/${p[1]}` : '#/';
+}
+function goBack() {
+  if (navDepth > 0 && history.length > 1) { navDepth -= 2; history.back(); }
+  else location.hash = parentHash();
+}
+const BACK_BTN = '<button type="button" class="btn ghost backbtn" data-back>→ رجوع</button>';
+document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-back]')) { e.preventDefault(); goBack(); } });
+
 function shell(content, active) {
   document.body.className = '';
+  const root = !location.hash.replace(/^#\/?/, '').split('?')[0];
   const s = S();
   const nav = [['#/', 'القضايا', ICON.list, 'list'], ['#/new', 'قضية جديدة', ICON.plus, 'new'],
                ['#/stats', 'الإحصائيات', ICON.chart, 'stats'], ['#/settings', 'الإعدادات', ICON.gear, 'settings']];
@@ -393,7 +413,7 @@ function shell(content, active) {
       <nav>${nav.map(n => `<a href="${n[0]}" class="${active === n[3] ? 'active' : ''}">${n[1]}</a>`).join('')}</nav>
       ${s.lock_hash ? '<button class="lockbtn" id="lockNow">قفل</button>' : ''}
     </header>
-    <main class="container">${content}</main>
+    <main class="container">${root ? '' : `<div class="backrow">${BACK_BTN}</div>`}${content}</main>
     <nav class="bottomnav">${nav.map(n => `<a href="${n[0]}" class="${active === n[3] ? 'active' : ''} ${n[3] === 'new' ? 'add' : ''}">${n[2]}<span>${n[3] === 'new' ? 'جديدة' : n[1]}</span></a>`).join('')}</nav>`;
   const l = $('#lockNow');
   if (l) l.onclick = () => { sessionStorage.removeItem('unlocked'); screenLock(); };
@@ -595,6 +615,7 @@ function viewCase(c) {
           <td data-l="سمعها">${esc(s.taker_name || '—')}</td>
           <td data-l="التوقيع">${s.signature_path ? `<img class="sig-img" style="max-height:40px" data-file="${esc(s.signature_path)}" alt="">` : '<span class="muted">بدون</span>'}</td>
           <td class="actions-cell"><div class="btns">
+            <a class="btn sm gold" href="#/case/${c.id}/statement/${s.id}/view">عرض</a>
             <a class="btn sm" href="#/case/${c.id}/statement/${s.id}/print">طباعة</a>
             <a class="btn sm ghost" href="#/case/${c.id}/statement/${s.id}">تعديل</a>
             <a class="btn sm ghost" href="#/case/${c.id}/remote/new?st=${s.id}">أسئلة إضافية</a>
@@ -626,6 +647,7 @@ function viewCase(c) {
           <td data-l="الطرف">${r.party_id ? esc(pName(r.party_id)) : (r.place ? esc(r.place) : '—')}</td>
           <td data-l="التاريخ">${esc(r.record_date || '—')}</td>
           <td class="actions-cell"><div class="btns">
+            <a class="btn sm gold" href="#/case/${c.id}/record/${r.id}/view">عرض</a>
             <a class="btn sm" href="#/case/${c.id}/record/${r.id}/print">طباعة</a>
             <a class="btn sm ghost" href="#/case/${c.id}/record/${r.id}">تعديل</a>
             <button class="btn sm danger" data-rdel="${r.id}">حذف</button></div></td></tr>`).join('')}
@@ -1141,8 +1163,10 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
     onLeave(() => { document.title = prev; });
   }
   app().innerHTML = `<div class="pv-bar">
+      ${BACK_BTN}
       <button class="btn gold" id="doPrint">🖨 طباعة / حفظ PDF</button>
       <a class="btn ghost" href="${back[0]}">${back[1]}</a>
+      <a class="btn ghost" href="${parentHash()}">ملف القضية</a>
       <span class="info" id="pvInfo">${info || ''}</span></div>
     <div class="pv-stage"><div class="pv-scale" id="pvScale">${sheetHTML}</div></div>`;
   const st = document.createElement('style'); st.id = 'pagerule'; st.textContent = pageRule;
@@ -1219,7 +1243,7 @@ function viewStatementPrint(c, st) {
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( ${esc(datedTitle('محضر سماع أقوال', st.statement_date))} )</span></div>
-    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
+    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleOf(p)} الموضحة ${p.gender === 'أنثى' ? 'بياناتها' : 'بياناته'} أدناه:</div>
     <table class="pdata">
       <tr><th>الاســم</th><td colspan="3"><b>${esc(p.name)}</b></td><th>الجنسية</th><td>${esc(p.nationality || '—')}</td></tr>
       <tr><th>رقم الهوية</th><td>${esc(p.national_id || '—')}</td><th>الجنس</th><td>${esc(p.gender || '—')}</td><th>تاريخ الميلاد</th><td>${esc(p.birth_date || '—')}</td></tr>
@@ -1243,7 +1267,8 @@ function viewStatementPrint(c, st) {
 // ========================= تقرير تقييم الإجراءات =========================
 function buildRefText(c, parties) {
   const cl = parties.filter(p => p.party_role === 'مدعي'), df = parties.filter(p => p.party_role === 'مدعى عليه');
-  const cTxt = cl.map(p => `${p.nationality || 'المواطن'} / ${p.name}` + (p.national_id ? ` هوية وطنية رقم (${p.national_id})` : '')).join(' و');
+  // «المواطن/ فلان» أو «المواطنة/ ...» أو «المقيم/ ...» — لا الجنسية نفسها
+  const cTxt = cl.map(p => partyLabel(p) + (p.national_id ? ` ${isCitizen(p) ? 'هوية وطنية' : 'إقامة'} رقم (${p.national_id})` : '')).join(' و');
   const dTxt = df.map(p => (p.rank_job ? p.rank_job + ' / ' : '') + p.name).join(' و');
   let t = `خطاب ${c.order_source || ''} رقم (${c.order_number || ''}) وتاريخ ${c.order_date || ''}هـ`;
   if (cTxt) t += `، بشأن شكوى ${cTxt}`;
@@ -1252,10 +1277,10 @@ function buildRefText(c, parties) {
   return t + '.';
 }
 // ---- خطاب التغطية ----
+const isCitizen = p => !p.nationality || /سعودي/.test(p.nationality);
 function partyLabel(p) {
   const f = p.gender === 'أنثى';
-  const citizen = !p.nationality || /سعودي/.test(p.nationality);
-  return (citizen ? (f ? 'المواطنة' : 'المواطن') : (f ? 'المقيمة' : 'المقيم')) + '/ ' + p.name;
+  return (isCitizen(p) ? (f ? 'المواطنة' : 'المواطن') : (f ? 'المقيمة' : 'المقيم')) + '/ ' + p.name;
 }
 function buildCoverText(c) {
   const ps = DB.parties.filter(p => p.case_id === c.id);
@@ -1437,7 +1462,7 @@ const CALL_RESULTS = { noanswer: 'ولم يرد على الاتصال', off: 'و
   waive: 'رد وأفاد بتنازله وعدم رغبته بالحضور' };
 /** سطر محضر الاتصال في «الإجراءات» بتقرير تقييم القضية */
 function callProcLine(r, p) {
-  const f = p.gender === 'أنثى', who = `${roleWord(p.party_role)} / ${p.name}`;
+  const f = p.gender === 'أنثى', who = `${roleOf(p)} / ${p.name}`;
   if (r.result === 'waive') return `إعداد محضر اتصال على ${who}، ${f ? 'وأفادت بعدم رغبتها' : 'وأفاد بعدم رغبته'} بالمراجعة و${f ? 'تنازلها' : 'تنازله'} عن مواصلة الدعوى وعدم ${f ? 'رغبتها' : 'رغبته'} بالحضور.`;
   const why = { off: `لإغلاق ${f ? 'جوالها' : 'جواله'}`, out: `لكون ${f ? 'رقمها' : 'رقمه'} خارج الخدمة` }[r.result] || `لعدم ${f ? 'ردها' : 'رده'} على الاتصال`;
   return `إعداد محضر اتصال على ${who} ${why}.`;
@@ -1576,6 +1601,35 @@ function viewRecordForm(c, rd, newType, partyId) {
   };
 }
 
+// ---- عرض نص المحضر على الشاشة (بدل معاينة الطباعة) ----
+function docShow(c, title, meta, bodyHTML, footHTML, base) {
+  shell(`
+    <div class="page-head"><h1>${esc(title)} <span>— قضية رقم ${esc(c.case_number || c.id)}</span></h1>
+      <div class="acts"><a class="btn gold" href="${base}/print">طباعة / PDF</a>
+        <a class="btn ghost" href="${base}">تعديل</a>
+        <a class="btn ghost" href="#/case/${c.id}">ملف القضية</a></div></div>
+    <div class="card doc-show">
+      <div class="doc-meta">${meta.filter(m => m[1]).map(m => `<span><b>${m[0]}</b> ${esc(m[1])}</span>`).join('')}</div>
+      <div class="doc-text amiri">${bodyHTML}</div>
+      ${footHTML}
+    </div>`);
+}
+function viewRecordShow(c, r) {
+  const p = byId('parties', r.party_id);
+  docShow(c, datedTitle(recordTitle(r), r.record_date),
+    [['الطرف:', p ? `${roleOf(p)} / ${p.name}` : ''], ['المكان:', r.place], ['معد المحضر:', [r.taker_rank, r.taker_name].filter(Boolean).join('/ ')]],
+    `<div class="tight">${tightText(r.body)}</div>`, '', `#/case/${c.id}/record/${r.id}`);
+}
+function viewStatementShow(c, st) {
+  const p = byId('parties', st.party_id) || {};
+  docShow(c, datedTitle('محضر سماع أقوال', st.statement_date),
+    [['الطرف:', `${roleOf(p)} / ${p.name || ''}`], ['الهوية:', p.national_id], ['الجوال:', p.phone], ['المكان:', st.location],
+     ['سمع الأقوال:', [st.taker_rank, st.taker_name].filter(Boolean).join(' / ')]],
+    `<div class="qa">${qaHTML(st.text, st.answer_sigs)}</div>`,
+    st.signature_path ? `<div class="doc-sig"><b>توقيع ${esc(roleOf(p))}:</b><img class="sig-img" data-file="${esc(st.signature_path)}" alt=""></div>` : '',
+    `#/case/${c.id}/statement/${st.id}`);
+}
+
 function viewRecordPrint(c, r) {
   const sig = r.no_sig ? '' : S().taker_sig;
   const html = `<div class="sheet flow" id="sheet"><div class="inner">
@@ -1604,16 +1658,36 @@ function fillTemplate(c, t) {
 
 function buildProcedures(c) {
   const lines = DB.statements.filter(s => s.case_id === c.id)
-    .map(s => { const p = byId('parties', s.party_id) || {}; return `سماع أقوال ${roleWord(p.party_role)} / ${p.name || ''}.`; });
-  DB.records.filter(r => r.case_id === c.id).forEach(r => {
-    const p = byId('parties', r.party_id);
-    lines.push(recordProcLine(r));
-  });
+    .map(s => { const p = byId('parties', s.party_id) || {}; return `سماع أقوال ${roleOf(p)} / ${p.name || ''}.`; });
+  DB.records.filter(r => r.case_id === c.id).forEach(r => lines.push(recordProcLine(r)));
   return lines.map((t, i) => `${i + 1}. ${t}`).join('\n');
 }
 function recordProcLine(r) {
   const p = byId('parties', r.party_id);
-  return r.type === 'call' && p ? callProcLine(r, p) : `إعداد ${recordTitle(r)}${p ? ` بشأن ${roleWord(p.party_role)} / ${p.name}` : ''}.`;
+  return r.type === 'call' && p ? callProcLine(r, p) : `إعداد ${recordTitle(r)}${p ? ` بشأن ${roleOf(p)} / ${p.name}` : ''}.`;
+}
+/** إجراءات إضافية يختار المستخدم إدراجها في التقرير (لا تُضاف تلقائيًا) */
+const DEF_EXTRA_PROCS = ['جرى الاطلاع على كامل أوراق القضية.'];
+function extraProcChoices(c) {
+  const out = (S().extra_procs || DEF_EXTRA_PROCS).map(t => ({ t, saved: true }));
+  DB.letters.filter(l => l.case_id === c.id && l.type !== 'cover').forEach(l => {
+    const to = (l.to || '').trim() || '(      )';
+    const p = byId('parties', l.party_id);
+    const about = l.type === 'unit' ? (l.req === 'inform' ? `إفادتنا عن ${(l.req_detail || '').trim() || '(      )'}`
+      : l.req === 'custom' ? (l.req_detail || '').trim() : `إبلاغ ${p ? (p.rank_job ? p.rank_job.replace(/\s*\/\s*$/, '') + '/ ' : '') + p.name : 'المدعى عليه'} بالمراجعة`) : '';
+    out.push({ t: `جرى مخاطبة ${to} بالخطاب رقم (${l.letter_number || '      '}) وتاريخ ${l.letter_date ? l.letter_date + 'هـ' : '(      )'}${about ? ' بشأن ' + about.replace(/[.،]$/, '') : ''}.` });
+  });
+  DB.attachments.filter(a => a.case_id === c.id).forEach(a => out.push({ t: `جرى الاطلاع على ${(a.title || '').trim().replace(/[.،]$/, '')}.` }));
+  return out;
+}
+/** إضافة/حذف سطر مرقّم في نص الإجراءات مع إعادة الترقيم */
+const PROC_NUM = /^\s*\d+\s*[.\-)]\s*/;
+const procHas = (txt, line) => (txt || '').split('\n').some(l => l.replace(PROC_NUM, '').trim() === line);
+function setProcLine(txt, line, on) {
+  const ls = (txt || '').replace(/\s+$/, '').split('\n').filter(l => l.replace(PROC_NUM, '').trim() !== line);
+  if (on) ls.push('0. ' + line);
+  let n = 0;
+  return ls.map(l => PROC_NUM.test(l) ? `${++n}. ${l.replace(PROC_NUM, '').trim()}` : l).join('\n').replace(/^\s*\n/, '');
 }
 /** إن كان التقرير مُعدًّا: يُدرج سطر المحضر في «الإجراءات» (ويُستبدل سطره السابق إن تغيّر) */
 function syncReportProc(c, rec) {
@@ -1660,7 +1734,12 @@ function viewReportForm(c) {
       <div class="hint">تُولَّد تلقائيًا من بيانات القضية والأطراف — يمكنك تعديلها بحرية</div></div>
     <div class="card"><h2>الإجراءات <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
       <textarea name="procedures_text" class="amiri" style="min-height:130px">${esc(r.procedures_text)}</textarea>
-      <div class="hint">تُدرج محاضر سماع الأقوال المسجلة مرقّمة — أضف أو عدّل ما تحتاجه</div></div>
+      <div class="hint">تُدرج محاضر سماع الأقوال ومحاضر الإجراءات مرقّمة — أضف أو عدّل ما تحتاجه</div>
+      <div class="xproc"><div class="xproc-h">إجراءات إضافية — علّم ما تريد إضافته للتقرير</div>
+        <div id="xprocList"></div>
+        <div class="xproc-add"><input type="text" id="xprocNew" placeholder="اكتب إجراءً آخر، مثال: جرى الاطلاع على سجل الموقوفين.">
+          <button type="button" class="btn sm" id="xprocAdd">إضافة</button></div>
+        <div class="hint">الإجراء الذي تكتبه يُحفظ في القائمة ليظهر في كل القضايا. اضغط ✕ لحذفه من القائمة.</div></div></div>
     <div class="card"><h2>صيغة جاهزة للنتيجة والمرئيات</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">${(S().report_templates || []).map((t, i) =>
         `<button type="button" class="btn ghost" data-tpl="${i}">${esc(t.name)}</button>`).join('') || '<span class="muted">لا توجد صيغ — أضفها من الإعدادات</span>'}</div>
@@ -1684,7 +1763,36 @@ function viewReportForm(c) {
     setVal(f.result_text, fillTemplate(c, t.result)); setVal(f.opinion_text, fillTemplate(c, t.opinion));
     toast('تم إدراج الصيغة — راجعها قبل الحفظ');
   });
-  $('#regenProc').onclick = () => { if (!f.procedures_text.value.trim() || confirm('استبدال نص الإجراءات بالصيغة المولّدة؟')) f.procedures_text.value = buildProcedures(c); };
+  $('#regenProc').onclick = () => { if (!f.procedures_text.value.trim() || confirm('استبدال نص الإجراءات بالصيغة المولّدة؟')) { setVal(f.procedures_text, buildProcedures(c)); drawX(); } };
+  // الإجراءات الإضافية: علامة الصح تضيف السطر مرقّمًا في آخر «الإجراءات»، وإزالتها تحذفه
+  const drawX = () => {
+    $('#xprocList').innerHTML = extraProcChoices(c).map((x, i) => `<label class="xproc-item">
+      <input type="checkbox" data-x="${i}" ${procHas(f.procedures_text.value, x.t) ? 'checked' : ''}><span>${esc(x.t)}</span>
+      ${x.saved ? `<button type="button" class="xdel" data-xdel="${i}" title="حذف من القائمة">✕</button>` : ''}</label>`).join('');
+    const ch = extraProcChoices(c);
+    $$('[data-x]').forEach(cb => cb.onchange = () => setVal(f.procedures_text, setProcLine(f.procedures_text.value, ch[+cb.dataset.x].t, cb.checked)));
+    $$('[data-xdel]').forEach(b => b.onclick = async e => {
+      e.preventDefault();
+      const t = ch[+b.dataset.xdel].t;
+      if (!confirm(`حذف «${t}» من قائمة الإجراءات الإضافية؟`)) return;
+      S().extra_procs = (S().extra_procs || DEF_EXTRA_PROCS).filter(x => x !== t); await save(); drawX();
+    });
+  };
+  drawX();
+  f.procedures_text.addEventListener('input', () => {
+    const ch = extraProcChoices(c);
+    $$('[data-x]').forEach(cb => { cb.checked = procHas(f.procedures_text.value, ch[+cb.dataset.x].t); });
+  });
+  $('#xprocAdd').onclick = async () => {
+    const inp = $('#xprocNew');
+    let t = inp.value.trim().replace(/^\s*\d+\s*[.\-)]\s*/, '');
+    if (!t) { inp.focus(); return; }
+    if (!/[.!؟]$/.test(t)) t += '.';
+    const list = S().extra_procs || DEF_EXTRA_PROCS.slice();
+    if (!list.includes(t)) { S().extra_procs = list.concat(t); await save(); }
+    setVal(f.procedures_text, setProcLine(f.procedures_text.value, t, true));
+    setVal(inp, ''); drawX(); toast('أُضيف الإجراء للتقرير وحُفظ في القائمة');
+  };
   let wantPrint = false;
   $('[data-print]', f).onclick = () => { wantPrint = true; };
   f.onsubmit = async e => {
