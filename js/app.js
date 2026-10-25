@@ -82,7 +82,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 18;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 19;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -301,7 +301,8 @@ function autoGrow(ta) {
   const y = window.scrollY;
   ta.style.height = 'auto';
   ta.style.height = (ta.scrollHeight + 2) + 'px';
-  window.scrollTo(0, y);
+  // نعيد الموضع فقط إن تغيّر، حتى لا نقطع تمريرًا جاريًا (مثل الانتقال لقسم من التبويبات)
+  if (window.scrollY !== y) window.scrollTo(0, y);
 }
 function setVal(el, v) { el.value = v; autoGrow(el); }
 document.addEventListener('input', e => autoGrow(e.target));
@@ -677,7 +678,24 @@ function viewCase(c) {
       </div>
     </div>`);
 
-  $$('[data-j]').forEach(b => b.onclick = () => { const t = document.getElementById(b.dataset.j); window.scrollTo({ top: t.getBoundingClientRect().top + scrollY - 70, behavior: 'smooth' }); });
+  // طريقة العرض (من الإعدادات): صفحة طولية والتبويب ينقل لقسمه، أو كل تبويب صفحة مستقلة
+  const tabs = $$('[data-j]'), tabMode = lsGet('caseView', 'long') === 'tabs';
+  const showTab = id => {
+    tabs.forEach(b => { b.classList.toggle('on', b.dataset.j === id); document.getElementById(b.dataset.j).style.display = b.dataset.j === id ? '' : 'none'; });
+    try { sessionStorage.setItem('caseTab:' + c.id, id); } catch (e) {}
+    const on = tabs.find(b => b.dataset.j === id), bar = on.parentElement;
+    bar.scrollLeft += on.getBoundingClientRect().left - bar.getBoundingClientRect().left - (bar.clientWidth - on.offsetWidth) / 2;
+    growAll();
+  };
+  if (tabMode) {
+    let cur = null; try { cur = sessionStorage.getItem('caseTab:' + c.id); } catch (e) {}
+    showTab(tabs.some(b => b.dataset.j === cur) ? cur : tabs[0].dataset.j);
+  }
+  tabs.forEach(b => b.onclick = () => {
+    if (tabMode) { showTab(b.dataset.j); window.scrollTo(0, 0); return; }
+    const t = document.getElementById(b.dataset.j);
+    window.scrollTo(0, t.getBoundingClientRect().top + scrollY - 70);   // قفز مباشر: التمرير الناعم لا يعمل في كل المتصفحات
+  });
   $('#delCase').onclick = async () => {
     if (!confirm('حذف القضية وجميع أطرافها ومحاضرها ومرفقاتها نهائيًا؟')) return;
     for (const s of sts) await delFile(s.signature_path);
@@ -1831,6 +1849,16 @@ function viewSettings() {
       <div class="hint">النسخة ملف واحد يُحفظ في «التنزيلات» على جهازك، ويضم القضايا بأطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها. «النسخة الكاملة» تضم الإعدادات أيضًا. عند الاستيراد تختار: إضافة القضايا إلى بياناتك (والقضية الموجودة تُحدَّث)، أو استبدال كل البيانات. ولحفظ قضية واحدة: افتح ملفها واضغط «حفظ نسخة من هذه القضية».</div>
     </div>
 
+    <div class="card"><h2>طريقة عرض ملف القضية</h2>
+      <div class="sigmodes">
+        <label class="sigmode"><input type="radio" name="caseView" value="long" ${lsGet('caseView', 'long') !== 'tabs' ? 'checked' : ''}>
+          <span><b>صفحة طولية</b><br><span class="muted">كل الأقسام تحت بعضها في صفحة واحدة، والضغط على التبويب ينقلك إلى قسمه</span></span></label>
+        <label class="sigmode"><input type="radio" name="caseView" value="tabs" ${lsGet('caseView', 'long') === 'tabs' ? 'checked' : ''}>
+          <span><b>تبويبات</b><br><span class="muted">كل تبويب (البيانات، الأطراف، المحاضر...) يظهر وحده كصفحة مستقلة</span></span></label>
+      </div>
+      <div class="hint">يُحفظ هذا الاختيار على هذا الجهاز فقط، فلك أن تختار طريقة للجوال وأخرى للكمبيوتر.</div>
+    </div>
+
     <form id="f">
     <div class="card"><h2>ترويسة المستندات الرسمية</h2>
       <div class="grid g3">
@@ -1954,7 +1982,8 @@ function viewSettings() {
     await delFileIfUnused(prev);
     log('حذف توقيع المحقق'); await save(); route();
   };
-  $('#bkExport').onclick = () => exportBackup().catch(e => toast('تعذّر التصدير: ' + e.message, 'error'));
+  $$('[name=caseView]').forEach(r => r.onchange = () => { lsSet('caseView', r.value); toast(r.value === 'tabs' ? 'ملف القضية: تبويبات' : 'ملف القضية: صفحة طولية'); });
+  $('#bkExport').onclick =() => exportBackup().catch(e => toast('تعذّر التصدير: ' + e.message, 'error'));
   $('#bkPick').onclick = () => DB.cases.length ? exportPicker() : toast('لا توجد قضايا', 'error');
   $('#bkImport').onchange = e => { const fl = e.target.files[0]; if (fl) importBackup(fl).catch(err => toast('تعذّر الاستيراد: ' + err.message, 'error')); };
   const mf = $('#mvFolder');
