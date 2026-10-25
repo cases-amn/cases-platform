@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS = {
       opinion: 'إحالة رجل الأمن المذكور إلى الجهة المختصة لاتخاذ الإجراء النظامي بحقه، وإشعار المدعي بما تم.' },
   ],
 };
-const APP_VERSION = 14;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 15;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests'];
 let DB = null;
@@ -93,6 +93,8 @@ function shapeDB(d) {
   d.seq.case_no = Math.max(d.seq.case_no || 0, ...d.cases.map(c => /^\d+$/.test(String(c.case_number || '').trim()) ? +c.case_number : 0), 0);
   d.settings = Object.assign({}, DEFAULT_SETTINGS, d.settings || {});
   d.log = Array.isArray(d.log) ? d.log : [];
+  // المحاضر الواردة برابط الإفادة كانت تُحفظ بمكان «إفادة إلكترونية عن بُعد»: تأخذ المكان الافتراضي
+  for (const s of d.statements) if (s.location === 'إفادة إلكترونية عن بُعد') s.location = d.settings.def_location;
   // نص خطاب التغطية المحفوظ في القضية (الإصدار السابق) يصبح خطابًا في قائمة الخطابات
   for (const c of d.cases) if (c.cover_text) {
     d.letters.push({ id: ++d.seq.letters, case_id: c.id, type: 'cover', to: d.settings.cover_to, body: c.cover_text,
@@ -459,7 +461,7 @@ function viewCase(c) {
         <a class="btn ghost" href="#/case/${c.id}/edit">تعديل البيانات</a>
         <button class="btn danger" id="delCase">حذف</button></div>
     </div>
-    <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'], ['sRemote', 'إفادة عن بُعد (' + reqs.length + ')'],
+    <div class="jump">${[['sMain', 'البيانات'], ['sParties', 'الأطراف (' + parties.length + ')'], ['sSts', 'المحاضر (' + sts.length + ')'], ['sRemote', 'طلبات الإفادة (' + reqs.length + ')'],
       ['sAtt', 'المرفقات (' + atts.length + ')'], ['sRep', 'التقرير'], ['sLetters', 'الخطابات (' + letters.length + ')']].map(j => `<button data-j="${j[0]}">${j[1]}</button>`).join('')}</div>
 
     <div class="card" id="sMain"><h2>البيانات الرئيسية</h2>
@@ -500,7 +502,7 @@ function viewCase(c) {
         <tr class="hd"><th>م</th><th>الطرف</th><th>الصفة</th><th>التاريخ</th><th>سمعها</th><th>التوقيع</th><th></th></tr>
         ${sts.map((s, i) => `<tr>
           <td class="nomob">${i + 1}</td>
-          <td data-l="الطرف"><b>${esc(pName(s.party_id))}</b>${s.remote ? ' <span class="badge st-مرفوعة">عن بُعد</span>' : ''}</td>
+          <td data-l="الطرف"><b>${esc(pName(s.party_id))}</b></td>
           <td data-l="الصفة"><span class="badge role">${esc(pRole(s.party_id))}</span></td>
           <td data-l="التاريخ">${esc(s.statement_date || '—')}</td>
           <td data-l="سمعها">${esc(s.taker_name || '—')}</td>
@@ -514,7 +516,7 @@ function viewCase(c) {
       <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/statement/new">+ محضر سماع أقوال جديد</a></div>
     </div>
 
-    <div class="card" id="sRemote"><h2>طلبات الإفادة عن بُعد</h2>
+    <div class="card" id="sRemote"><h2>طلبات الإفادة</h2>
       ${reqs.length ? `<table class="rt">
         <tr class="hd"><th>م</th><th>الطرف</th><th>ينتهي</th><th>الحالة</th><th></th></tr>
         ${reqs.map((r, i) => { const [t, cls] = remoteStatus(r); return `<tr>
@@ -525,7 +527,7 @@ function viewCase(c) {
           <td class="actions-cell"><div class="btns"><a class="btn sm" href="#/case/${c.id}/remote/${r.id}">فتح</a>
             ${!remoteStopped(r) ? `<button class="btn sm danger" data-rstop="${r.id}">إيقاف الرابط</button>` : ''}</div></td></tr>`; }).join('')}
       </table>` : '<div class="empty">أرسل للطرف رابطًا بالواتساب فيه أسئلتك، يجيب ويوقّع، ويعيد لك ملف الإفادة فيصير محضرًا في القضية</div>'}
-      <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/remote/new">+ طلب إفادة عن بُعد</a></div>
+      <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/remote/new">+ طلب إفادة</a></div>
     </div>
 
     <div class="card" id="sAtt"><h2>الخطابات والمرفقات</h2>
@@ -1063,7 +1065,7 @@ function viewStatementPrint(c, st) {
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( محضر سماع أقوال )</span></div>
-    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، ${st.remote ? `وردت إفادة ${roleWord(p.party_role)} الموضحة بياناته أدناه إلكترونيًا عن بُعد${st.remote_at ? ` (${esc(fmtWhen(st.remote_at))})` : ''}، ونصها` : `تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه`}:</div>
+    <div class="intro">إنه في يوم ${esc(st.statement_date || ' ........ ')}هـ، وبموجب خطاب ${esc(c.order_source)} رقم (${esc(c.order_number || '      ')}) وتاريخ ${c.order_date ? esc(c.order_date) + 'هـ' : '(      )'}، تم سماع أقوال ${roleWord(p.party_role)} الموضحة بياناته أدناه:</div>
     <table class="pdata">
       <tr><th>الاســم</th><td colspan="3"><b>${esc(p.name)}</b></td><th>الجنسية</th><td>${esc(p.nationality || '—')}</td></tr>
       <tr><th>رقم الهوية</th><td>${esc(p.national_id || '—')}</td><th>الجنس</th><td>${esc(p.gender || '—')}</td><th>تاريخ الميلاد</th><td>${esc(p.birth_date || '—')}</td></tr>

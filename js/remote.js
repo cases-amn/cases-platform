@@ -111,7 +111,7 @@ function viewRemoteRequestForm(c, partyId, stId) {
   let qs = base ? [{ q: '', t: 'text' }] : defaultRemoteQuestions(c, p);
   let autoFirst = qs[0].q;
   shell(`
-    <div class="page-head"><h1>${base ? 'أسئلة <span>إضافية</span> لمحضر سابق' : 'طلب <span>إفادة عن بُعد</span>'} — قضية رقم ${esc(c.case_number || c.id)}</h1>
+    <div class="page-head"><h1>${base ? 'أسئلة <span>إضافية</span> لمحضر سابق' : 'طلب <span>إفادة</span>'} — قضية رقم ${esc(c.case_number || c.id)}</h1>
       <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
     ${base ? `<div class="note">تُلحق الأجوبة بمحضر ${esc(p.name || '')} بتاريخ ${esc(base.statement_date || '—')} بعد آخر جواب فيه، ويوقّع الطرف على كل جواب. لا يظهر للطرف شيء من أسئلته السابقة.</div>` : ''}
     <form id="f">
@@ -173,7 +173,7 @@ function viewRemoteRequestForm(c, partyId, stId) {
       questions: clean, code: o.use_code ? String(Math.floor(1000 + Math.random() * 9000)) : '',
       created_at: Date.now(), expires_at: Date.now() + (+o.hours) * 3600e3, status: 'pending' };
     DB.requests.push(req);
-    log(base ? 'إنشاء أسئلة إضافية عن بُعد' : 'إنشاء طلب إفادة عن بُعد', 'قضية #' + c.id);
+    log(base ? 'إنشاء أسئلة إضافية' : 'إنشاء طلب إفادة', 'قضية #' + c.id);
     await save();
     location.hash = `#/case/${c.id}/remote/${req.id}`;
   };
@@ -192,7 +192,7 @@ async function viewRemoteRequest(c, req) {
   const wa = `https://wa.me/${waNumber(p.phone)}?text=${encodeURIComponent(msg)}`;
   const open = req.status === 'pending' && !remoteStopped(req) && Date.now() <= req.expires_at;
   shell(`
-    <div class="page-head"><h1>طلب <span>إفادة عن بُعد</span> — ${esc(p.name || '')}</h1>
+    <div class="page-head"><h1>طلب <span>إفادة</span> — ${esc(p.name || '')}</h1>
       <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
     <div class="card"><h2>حالة الطلب <span class="badge ${stCls} count">${stTxt}</span></h2>
       <div class="kv">
@@ -231,7 +231,7 @@ async function viewRemoteRequest(c, req) {
 async function stopRemoteRequest(req) {
   if (!confirm('إيقاف الرابط؟ لن تُقبل أي إفادة تصل عنه بعد الآن.')) return;
   Object.assign(req, req.status === 'done' ? { stopped: true, cancelled_at: Date.now() } : { status: 'cancelled', cancelled_at: Date.now() });
-  log('إيقاف رابط إفادة عن بُعد', 'قضية #' + req.case_id); await save(); toast('تم إيقاف الرابط'); route();
+  log('إيقاف رابط إفادة', 'قضية #' + req.case_id); await save(); toast('تم إيقاف الرابط'); route();
 }
 
 // ========================= جهة المحقق: استلام الإفادة =========================
@@ -261,14 +261,14 @@ async function acceptResponse(data) {
     Object.assign(st, { text: (st.text || '').trimEnd() + '\n\n' + qa, answer_sigs: prev.concat(newSigs), signature_path: sig || st.signature_path });
   } else {
     st = { id: nextId('statements'), case_id: req.case_id, party_id: req.party_id,
-      statement_date: hijriOf(data.submitted_at), location: 'إفادة إلكترونية عن بُعد',
+      statement_date: hijriOf(data.submitted_at), location: S().def_location,
       text: qa, answer_sigs: newSigs,
       signature_path: sig, taker_rank: S().def_taker_rank, taker_name: S().def_taker_name || (c && c.assigned_name) || '',
       taker_sig_path: S().taker_sig || '', remote: true, remote_at: data.submitted_at, created_at: nowStr() };
     DB.statements.push(st);
   }
   Object.assign(req, { status: 'done', statement_id: st.id, received_at: Date.now() });
-  log(req.append_to ? 'استلام أسئلة إضافية عن بُعد' : 'استلام إفادة عن بُعد', 'قضية #' + req.case_id);
+  log(req.append_to ? 'استلام أسئلة إضافية' : 'استلام إفادة', 'قضية #' + req.case_id);
   await save();
   toast(req.append_to ? 'تم استلام الأجوبة وإلحاقها بالمحضر' : 'تم استلام الإفادة وإضافتها محضرًا في القضية');
   location.hash = `#/case/${req.case_id}/statement/${st.id}`;
