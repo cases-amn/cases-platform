@@ -18,6 +18,8 @@
   --white: #ffffff;
   --red: #a4262c;
   --navh: 0px;
+  /* يمنع «الوضع الداكن التلقائي» في متصفحات الجوال من قلب الألوان وتبهيت النصوص */
+  color-scheme: only light;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -112,11 +114,11 @@ tr.clickable { cursor: pointer; }
 
 /* ---------- شارات الحالة ---------- */
 .badge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; white-space: nowrap; }
-.badge.st-جارية { background: var(--gold-light); color: var(--gold); }
-.badge.st-منجزة { background: var(--green-light); color: var(--green); }
-.badge.st-مرفوعة { background: #e5ecf6; color: #2b579a; }
+.badge.st-جارية { background: var(--gold-light); color: #6b4f07; }
+.badge.st-منجزة { background: var(--green-light); color: var(--green-dark); }
+.badge.st-مرفوعة { background: #e5ecf6; color: #1d4380; }
 .badge.role { background: var(--green-light); color: var(--green-dark); }
-.badge.n { background: #eef1ef; color: var(--muted); }
+.badge.n { background: #e6eae7; color: #1f2a24; }
 
 /* ---------- التنبيهات ---------- */
 .toast {
@@ -214,8 +216,14 @@ tr.clickable { cursor: pointer; }
 
 /* ================= الجوال ================= */
 @media (max-width: 760px) {
-  :root { --navh: calc(62px + env(safe-area-inset-bottom)); }
+  :root { --navh: calc(62px + env(safe-area-inset-bottom)); --muted: #222b26; --line: #c3cfc8; }
   body { font-size: 16px; padding-bottom: var(--navh); }
+  /* خط Tajawal الرفيع يبدو باهتًا على شاشات الجوال: وزن أثقل للنصوص الصغيرة */
+  .hint, .muted, .sigmode, td, .choice span, .kpi .l, .bottomnav a, .badge, th { font-weight: 700; }
+  .hint { font-size: 13.5px; }
+  .muted { font-size: 14px; }
+  .topbar .brand .tag { color: #fff; font-size: 12px; font-weight: 500; }
+  input::placeholder, textarea::placeholder { color: #5b665f; opacity: 1; }
   .topbar { height: 54px; padding: 0 14px; gap: 10px; }
   .topbar nav { display: none; }
   .topbar .brand { font-size: 15px; flex: 1; }

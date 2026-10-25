@@ -1,5 +1,5 @@
 /* يعمل بدون إنترنت بعد أول فتح: يخزّن ملفات الواجهة فقط (لا بيانات) */
-const CACHE = 'cases-ui-v8';
+const CACHE = 'cases-ui-v9';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest',
   'css/app.css', 'css/print.css',

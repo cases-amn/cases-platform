@@ -48,7 +48,7 @@ async function remoteLink(req) {
 }
 function remoteStatus(r) {
   if (r.status === 'done') return ['تم الاستلام', 'st-منجزة'];
-  if (r.status === 'cancelled') return ['ملغى', 'n'];
+  if (r.status === 'cancelled') return ['موقوف', 'n'];
   if (Date.now() > r.expires_at) return ['انتهت المهلة', 'n'];
   return ['بانتظار الرد', 'st-جارية'];
 }
@@ -162,6 +162,10 @@ async function viewRemoteRequest(c, req) {
         <div><label>عدد الأسئلة</label><div>${req.questions.length}</div></div>
       </div>
       ${req.status === 'done' && req.statement_id ? `<div style="margin-top:14px"><a class="btn gold" href="#/case/${c.id}/statement/${req.statement_id}">فتح المحضر المستلم</a></div>` : ''}
+      ${req.status === 'done' ? '<div class="hint" style="margin-top:10px">الرابط مقفل تلقائيًا بعد الاستلام، ولا تُقبل عنه إفادة ثانية.</div>' : ''}
+      ${req.status === 'cancelled' ? `<div class="hint" style="margin-top:10px">أُوقف الرابط${req.cancelled_at ? ' في ' + esc(fmtWhen(req.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.</div>` : ''}
+      ${req.status === 'pending' ? `<div style="margin-top:14px"><button class="btn danger" id="rqCancel">إيقاف الرابط الآن</button>
+        <div class="hint">بعد الإيقاف تُرفض أي إفادة تصل عن هذا الرابط، ويظهر مقفلًا عند فتحه من جهازك.</div></div>` : ''}
     </div>
     ${open ? `<div class="card"><h2>الإرسال</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
@@ -173,8 +177,7 @@ async function viewRemoteRequest(c, req) {
     ${req.status === 'pending' ? `<div class="card"><h2>استلام الإفادة</h2>
       <div class="hint" style="margin-bottom:10px">بعد أن يرسل لك ملف الإفادة على الواتساب احفظه، ثم اختره هنا لإضافته محضرًا في القضية.</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
-        <label class="btn" style="margin:0">اختيار ملف الإفادة<input type="file" id="rsFile" accept=".txt,.json,text/plain,application/json" hidden></label>
-        <button class="btn danger" id="rqCancel">إلغاء الطلب وقفل الرابط</button></div></div>` : ''}
+        <label class="btn" style="margin:0">اختيار ملف الإفادة<input type="file" id="rsFile" accept=".txt,.json,text/plain,application/json" hidden></label></div></div>` : ''}
     <div class="card"><h2>الأسئلة المرسلة</h2>
       ${req.questions.map((x, i) => `<div style="margin-bottom:10px"><b>س${i + 1} /</b> ${esc(x.q)}
         ${x.t === 'choice' ? `<div class="muted">اختيارات: ${x.o.map(esc).join('، ')}</div>` : x.t === 'yesno' ? '<div class="muted">نعم / لا</div>' : ''}</div>`).join('')}
@@ -183,8 +186,9 @@ async function viewRemoteRequest(c, req) {
   const cc = $('#cpCode'); if (cc) cc.onclick = () => copyText(req.code, 'تم نسخ الرمز');
   const rf = $('#rsFile'); if (rf) rf.onchange = async e => { const fl = e.target.files[0]; if (fl) await importResponseFile(fl); };
   const rc = $('#rqCancel'); if (rc) rc.onclick = async () => {
-    if (!confirm('إلغاء الطلب؟ لن تُقبل أي إفادة تصل عن هذا الرابط.')) return;
-    req.status = 'cancelled'; log('إلغاء طلب إفادة عن بُعد', 'قضية #' + c.id); await save(); route();
+    if (!confirm('إيقاف الرابط؟ لن تُقبل أي إفادة تصل عنه بعد الآن.')) return;
+    Object.assign(req, { status: 'cancelled', cancelled_at: Date.now() });
+    log('إيقاف رابط إفادة عن بُعد', 'قضية #' + c.id); await save(); toast('تم إيقاف الرابط'); route();
   };
 }
 
@@ -231,11 +235,24 @@ function remoteMessage(title, body) {
     <div style="line-height:1.9">${body}</div></div>`);
 }
 
+/** الطلب نفسه من بيانات هذا الجهاز إن كان جهاز المحقق (وإلا null) — قراءة فقط */
+async function ownRequest(rid) {
+  try {
+    if (await Store.init() !== 'ready') return null;
+    const d = await Store.backend.load();
+    return (d && Array.isArray(d.requests) && d.requests.find(r => r.rid === rid)) || null;
+  } catch (e) { return null; }
+}
+
 async function viewRemote() {
   let P;
   try { P = await unpackPayload(location.hash.slice(4)); if (!P || !P.rid || !Array.isArray(P.q)) throw 0; }
   catch (e) { return remoteMessage('الرابط غير صالح', 'تأكد من فتح الرابط كاملًا كما وصلك.'); }
   const doneKey = 'remote_done_' + P.rid, triesKey = 'remote_tries_' + P.rid;
+  // على جهاز المحقق نفسه: الرابط يتبع حالة الطلب في بياناته (مستلم / موقوف / منتهٍ)
+  const own = await ownRequest(P.rid);
+  if (own && own.status === 'done') return remoteMessage('الرابط مقفل', `تم استلام الإفادة عن هذا الطلب${own.received_at ? ' في ' + esc(fmtWhen(own.received_at)) : ''}، ولا يقبل الرابط إفادة أخرى.`);
+  if (own && own.status === 'cancelled') return remoteMessage('الرابط موقوف', `أوقفتَ هذا الرابط${own.cancelled_at ? ' في ' + esc(fmtWhen(own.cancelled_at)) : ''}، ولن تُقبل أي إفادة تصل عنه.`);
   const done = lsGet(doneKey, '');
   if (done) return remoteDone(P, done);
   if (Date.now() > P.exp) return remoteMessage('انتهت صلاحية الرابط', `انتهت مهلة هذا الطلب في ${esc(fmtWhen(P.exp))}.<br>تواصل مع المحقق لطلب رابط جديد.`);
