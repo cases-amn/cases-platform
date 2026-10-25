@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 23;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 24;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -602,6 +602,11 @@ function viewCase(c) {
             <button class="btn sm danger" data-pdel="${p.id}">حذف</button></div></td></tr>`).join('')}
       </table>` : '<div class="empty">لم تُضف أطراف بعد</div>'}
       <div style="margin-top:14px"><button class="btn ghost" id="addParty">+ إضافة طرف جديد</button></div>
+      <div class="defstyle"><div class="xproc-h">طريقة ذكر المدعى عليهم في الصياغة (التقرير والمحاضر والخطابات)</div>
+        <div class="sigmodes">${Object.entries(DEF_STYLES).map(([k, t]) => `<label class="sigmode"><input type="radio" name="def_style" value="${k}" ${(c.def_style || 'names') === k ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>
+        <div class="field" style="margin-top:10px"><label>الجهة (إن لم تُكتب «جهة العمل» لكل مدعى عليه)</label>
+          <input type="text" id="defUnit" value="${esc(c.def_unit || '')}" placeholder="مثال: القوة الخاصة لأمن الطرق"></div>
+        <div class="defprev amiri" id="defPrev"></div></div>
     </div>
 
     <div class="card" id="sSts"><h2>محاضر سماع الأقوال</h2>
@@ -735,6 +740,13 @@ function viewCase(c) {
   };
   $('#caseBackup').onclick = () => exportCases([c.id]).catch(e => toast('تعذّر الحفظ: ' + e.message, 'error'));
   $('#addParty').onclick = () => partyModal(c, null);
+  // طريقة ذكر المدعى عليهم: تُحفظ مع القضية فورًا، والمعاينة تتحدث مع الاختيار
+  const defPrev = () => { $('#defPrev').textContent = 'تظهر هكذا: … على ' + defendantsPhrase(c, 'شرطة المنطقة'); };
+  let defT;
+  const defSave = () => { clearTimeout(defT); defT = setTimeout(() => save(), 500); };
+  $$('[name=def_style]').forEach(r => r.onchange = () => { c.def_style = r.value; defPrev(); defSave(); });
+  $('#defUnit').addEventListener('input', e => { c.def_unit = e.target.value.trim(); defPrev(); defSave(); });
+  defPrev();
   $$('[data-pedit]').forEach(b => b.onclick = () => partyModal(c, byId('parties', b.dataset.pedit)));
   $$('[data-pdel]').forEach(b => b.onclick = async () => {
     const p = byId('parties', b.dataset.pdel);
@@ -1269,7 +1281,7 @@ function buildRefText(c, parties) {
   const cl = parties.filter(p => p.party_role === 'مدعي'), df = parties.filter(p => p.party_role === 'مدعى عليه');
   // «المواطن/ فلان» أو «المواطنة/ ...» أو «المقيم/ ...» — لا الجنسية نفسها
   const cTxt = cl.map(p => partyLabel(p) + (p.national_id ? ` ${isCitizen(p) ? 'هوية وطنية' : 'إقامة'} رقم (${p.national_id})` : '')).join(' و');
-  const dTxt = df.map(p => (p.rank_job ? p.rank_job + ' / ' : '') + p.name).join(' و');
+  const dTxt = df.length ? defendantsPhrase(c, '') : '';
   let t = `خطاب ${c.order_source || ''} رقم (${c.order_number || ''}) وتاريخ ${c.order_date || ''}هـ`;
   if (cTxt) t += `، بشأن شكوى ${cTxt}`;
   if (dTxt) t += `، ضد ${dTxt}`;
@@ -1286,9 +1298,7 @@ function buildCoverText(c) {
   const ps = DB.parties.filter(p => p.case_id === c.id);
   const cl = ps.filter(p => p.party_role === 'مدعي'), df = ps.filter(p => p.party_role === 'مدعى عليه');
   const claim = cl.length ? cl.map(partyLabel).join(' و') : '(      )';
-  const against = df.length
-    ? (df.length > 1 ? 'رجال الأمن/ ' : 'رجل الأمن/ ') + df.map(p => (p.rank_job ? p.rank_job + ' ' : '') + p.name).join(' و')
-    : 'أحد منسوبي شرطة المنطقة';
+  const against = defendantsPhrase(c, '');
   const num = c.order_number || '      ', date = c.order_date ? c.order_date + 'هـ' : '(      )';
   return 'السلام عليكم ورحمة الله وبركاته،\n\n' +
     `إشارة إلى خطابكم رقم (${num}) وتاريخ ${date} بشأن دعوى ${claim} على ${against}، ` +
@@ -1472,15 +1482,34 @@ const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأر�
 const datedTitle = (t, d) => (d || '').trim() ? `${t} بتاريخ ${d.trim()}هـ` : t;
 const recordTitle = r =>(r.type === 'open' ? (r.title || '').trim() : '') || RECORD_TYPES[r.type].label;
 /** على من الشكوى: الاسم إن وُجد، وإلا «أحد منسوبي» الجهة، وإلا شرطة المنطقة */
-function againstText(c) {
-  const df = caseDefendants(c);
-  if (!df.length) return 'أحد منسوبي شرطة المنطقة';
-  return df.map(p => {
-    const f = p.gender === 'أنثى', unit = (p.unit || '').trim();
-    const who = (f ? 'إحدى منسوبات ' : 'أحد منسوبي ') + (unit || 'شرطة المنطقة');
-    if (!(p.name || '').trim()) return who;
-    return `${who} ${p.rank_job ? p.rank_job.replace(/\s*\/\s*$/, '') + '/ ' : ''}${p.name}`;
-  }).join(' و');
+function againstText(c) { return defendantsPhrase(c, 'شرطة المنطقة'); }
+
+// ---- ذكر المدعى عليهم في الصياغة (واحد أو أكثر) ----
+const DEF_STYLES = {
+  names: 'الجهة مع الأسماء — «منسوبي الجهة وهم كلٌّ من: فلان، وفلان»',
+  unit: 'الجهة فقط بدون أسماء — «منسوبي الجهة»',
+  each: 'كل واحد على حدة — «أحد منسوبي الجهة فلان وأحد منسوبي الجهة فلان»',
+};
+const defName = p => (p.rank_job ? p.rank_job.replace(/\s*\/\s*$/, '') + '/ ' : '') + (p.name || '').trim();
+/** fb: الجهة المستخدمة إن لم تُحدد جهة العمل ولا جهة القضية ('' = بدون جهة، تُذكر الأسماء فقط) */
+function defendantsPhrase(c, fb) {
+  const df = caseDefendants(c), style = c.def_style || 'names', cu = (c.def_unit || '').trim();
+  if (!df.length) return `أحد منسوبي ${cu || 'شرطة المنطقة'}`;
+  const unitOf = p => (p.unit || '').trim() || cu || (style === 'unit' ? 'شرطة المنطقة' : fb || '');
+  const one = (p, u, named) => {
+    const f = p.gender === 'أنثى';
+    if (!u) return `${f ? 'منسوبة الأمن' : 'رجل الأمن'} ${defName(p)}`;
+    return `${f ? 'إحدى منسوبات' : 'أحد منسوبي'} ${u}${named && (p.name || '').trim() ? ' ' + defName(p) : ''}`;
+  };
+  if (style === 'each') return df.map(p => one(p, unitOf(p), true)).join(' و');
+  const groups = new Map();
+  df.forEach(p => { const u = unitOf(p); groups.set(u, (groups.get(u) || []).concat(p)); });
+  return [...groups].map(([u, ps]) => {
+    if (ps.length === 1) return one(ps[0], u, style !== 'unit');
+    const fem = ps.every(p => p.gender === 'أنثى');
+    const head = u ? `${fem ? 'منسوبات' : 'منسوبي'} ${u}` : (fem ? 'منسوبات الأمن' : 'رجال الأمن');
+    return style === 'unit' ? head : `${head} ${fem ? 'وهنّ' : 'وهم'} كلٌّ من: ${ps.map(defName).join('، و')}`;
+  }).join('، و');
 }
 function recordIntro(c) {
   const cl = DB.parties.filter(x => x.case_id === c.id && x.party_role === 'مدعي');
@@ -1651,9 +1680,14 @@ function viewRecordPrint(c, r) {
 function fillTemplate(c, t) {
   const ps = DB.parties.filter(p => p.case_id === c.id);
   const cl = ps.filter(p => p.party_role === 'مدعي').map(partyLabel).join(' و') || '(      )';
-  const df = ps.filter(p => p.party_role === 'مدعى عليه')
-    .map(p => (p.rank_job ? p.rank_job.replace(/\s*\/\s*$/, '') + '/ ' : '') + p.name).join(' و') || '(      )';
-  return (t || '').split('{المدعي}').join(cl).split('{المدعى عليه}').join(df);
+  const dfs = ps.filter(p => p.party_role === 'مدعى عليه');
+  let s = (t || '').split('{المدعي}').join(cl);
+  // أكثر من مدعى عليه، أو «الجهة فقط»: تحل عبارة القضية محل «رجل الأمن {المدعى عليه}» وتُجمع «المذكور»
+  if (dfs.length > 1 || (dfs.length && c.def_style === 'unit')) {
+    s = s.split('رجل الأمن {المدعى عليه}').join(defendantsPhrase(c, ''));
+    if (dfs.length > 1) s = s.split('رجل الأمن المذكور').join('رجال الأمن المذكورين').split('بحقه').join('بحقهم');
+  }
+  return s.split('{المدعى عليه}').join(dfs.map(defName).join('، و') || '(      )');
 }
 
 function buildProcedures(c) {
@@ -1683,11 +1717,29 @@ function extraProcChoices(c) {
 /** إضافة/حذف سطر مرقّم في نص الإجراءات مع إعادة الترقيم */
 const PROC_NUM = /^\s*\d+\s*[.\-)]\s*/;
 const procHas = (txt, line) => (txt || '').split('\n').some(l => l.replace(PROC_NUM, '').trim() === line);
-function setProcLine(txt, line, on) {
-  const ls = (txt || '').replace(/\s+$/, '').split('\n').filter(l => l.replace(PROC_NUM, '').trim() !== line);
-  if (on) ls.push('0. ' + line);
-  let n = 0;
-  return ls.map(l => PROC_NUM.test(l) ? `${++n}. ${l.replace(PROC_NUM, '').trim()}` : l).join('\n').replace(/^\s*\n/, '');
+/** نص الإجراءات كبنود: كل سطر مرقّم يبدأ بندًا، والأسطر غير المرقّمة بعده تتبعه */
+function procItems(txt) {
+  const pre = [], items = [];
+  (txt || '').replace(/\s+$/, '').split('\n').forEach(l => {
+    if (PROC_NUM.test(l)) items.push([l.replace(PROC_NUM, '').trim()]);
+    else if (items.length) items[items.length - 1].push(l);
+    else if (l.trim()) pre.push(l);
+  });
+  return { pre, items };
+}
+const procJoin = ({ pre, items }) => pre.concat(items.map((it, i) => [`${i + 1}. ${it[0]}`].concat(it.slice(1)).join('\n'))).join('\n');
+/** إضافة سطر (في الموضع pos، أو في الآخر) أو حذفه، مع إعادة الترقيم */
+function setProcLine(txt, line, on, pos) {
+  const d = procItems(txt);
+  d.items = d.items.filter(it => it[0] !== line);
+  if (on) d.items.splice(pos == null ? d.items.length : Math.min(pos, d.items.length), 0, [line]);
+  return procJoin(d);
+}
+function moveProc(txt, i, dir) {
+  const d = procItems(txt), j = i + dir;
+  if (j < 0 || j >= d.items.length) return txt;
+  [d.items[i], d.items[j]] = [d.items[j], d.items[i]];
+  return procJoin(d);
 }
 /** إن كان التقرير مُعدًّا: يُدرج سطر المحضر في «الإجراءات» (ويُستبدل سطره السابق إن تغيّر) */
 function syncReportProc(c, rec) {
@@ -1735,7 +1787,9 @@ function viewReportForm(c) {
     <div class="card"><h2>الإجراءات <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
       <textarea name="procedures_text" class="amiri" style="min-height:130px">${esc(r.procedures_text)}</textarea>
       <div class="hint">تُدرج محاضر سماع الأقوال ومحاضر الإجراءات مرقّمة — أضف أو عدّل ما تحتاجه</div>
+      <div class="procord"><div class="xproc-h">ترتيب الإجراءات — حرّك أي إجراء بالأسهم</div><div id="procOrd"></div></div>
       <div class="xproc"><div class="xproc-h">إجراءات إضافية — علّم ما تريد إضافته للتقرير</div>
+        <div class="field xproc-pos"><label>مكان الإضافة</label><select id="xprocPos"></select></div>
         <div id="xprocList"></div>
         <div class="xproc-add"><input type="text" id="xprocNew" placeholder="اكتب إجراءً آخر، مثال: جرى الاطلاع على سجل الموقوفين.">
           <button type="button" class="btn sm" id="xprocAdd">إضافة</button></div>
@@ -1763,26 +1817,42 @@ function viewReportForm(c) {
     setVal(f.result_text, fillTemplate(c, t.result)); setVal(f.opinion_text, fillTemplate(c, t.opinion));
     toast('تم إدراج الصيغة — راجعها قبل الحفظ');
   });
-  $('#regenProc').onclick = () => { if (!f.procedures_text.value.trim() || confirm('استبدال نص الإجراءات بالصيغة المولّدة؟')) { setVal(f.procedures_text, buildProcedures(c)); drawX(); } };
-  // الإجراءات الإضافية: علامة الصح تضيف السطر مرقّمًا في آخر «الإجراءات»، وإزالتها تحذفه
-  const drawX = () => {
-    $('#xprocList').innerHTML = extraProcChoices(c).map((x, i) => `<label class="xproc-item">
-      <input type="checkbox" data-x="${i}" ${procHas(f.procedures_text.value, x.t) ? 'checked' : ''}><span>${esc(x.t)}</span>
-      ${x.saved ? `<button type="button" class="xdel" data-xdel="${i}" title="حذف من القائمة">✕</button>` : ''}</label>`).join('');
+  // الإجراءات: قائمة ترتيب بالأسهم + إجراءات إضافية بعلامة صح تُدرج في المكان المختار
+  const P = f.procedures_text;
+  const setProc = v => { setVal(P, v); syncProc(); };
+  $('#regenProc').onclick = () => { if (!P.value.trim() || confirm('استبدال نص الإجراءات بالصيغة المولّدة؟')) setProc(buildProcedures(c)); };
+  const pos = () => { const v = $('#xprocPos').value; return v === '' ? null : +v; };
+  function syncProc() {
+    const items = procItems(P.value).items;
+    $('#procOrd').innerHTML = items.length ? items.map((it, i) => `<div class="po-item"><b>${i + 1}.</b><span>${esc(it[0])}</span>
+      <button type="button" class="po-btn" data-mv="${i}" data-d="-1" ${i ? '' : 'disabled'} title="للأعلى">▲</button>
+      <button type="button" class="po-btn" data-mv="${i}" data-d="1" ${i < items.length - 1 ? '' : 'disabled'} title="للأسفل">▼</button></div>`).join('')
+      : '<div class="muted">لا توجد إجراءات بعد</div>';
+    $$('[data-mv]').forEach(b => b.onclick = () => setProc(moveProc(P.value, +b.dataset.mv, +b.dataset.d)));
+    const sel = $('#xprocPos'), was = sel.value;
+    sel.innerHTML = '<option value="">في الأخير</option><option value="0">في الأول</option>' +
+      items.slice(0, -1).map((it, i) => `<option value="${i + 1}">بعد الإجراء ${i + 1}</option>`).join('');
+    if ([...sel.options].some(o => o.value === was)) sel.value = was;
     const ch = extraProcChoices(c);
-    $$('[data-x]').forEach(cb => cb.onchange = () => setVal(f.procedures_text, setProcLine(f.procedures_text.value, ch[+cb.dataset.x].t, cb.checked)));
+    $$('[data-x]').forEach(cb => { cb.checked = procHas(P.value, ch[+cb.dataset.x].t); });
+  }
+  const drawX = () => {
+    const ch = extraProcChoices(c);
+    $('#xprocList').innerHTML = ch.map((x, i) => `<label class="xproc-item">
+      <input type="checkbox" data-x="${i}"><span>${esc(x.t)}</span>
+      ${x.saved ? `<button type="button" class="xdel" data-xdel="${i}" title="حذف من القائمة">✕</button>` : ''}</label>`).join('');
+    $$('[data-x]').forEach(cb => cb.onchange = () => setProc(setProcLine(P.value, ch[+cb.dataset.x].t, cb.checked, pos())));
     $$('[data-xdel]').forEach(b => b.onclick = async e => {
       e.preventDefault();
       const t = ch[+b.dataset.xdel].t;
       if (!confirm(`حذف «${t}» من قائمة الإجراءات الإضافية؟`)) return;
       S().extra_procs = (S().extra_procs || DEF_EXTRA_PROCS).filter(x => x !== t); await save(); drawX();
     });
+    syncProc();
   };
   drawX();
-  f.procedures_text.addEventListener('input', () => {
-    const ch = extraProcChoices(c);
-    $$('[data-x]').forEach(cb => { cb.checked = procHas(f.procedures_text.value, ch[+cb.dataset.x].t); });
-  });
+  let procT;
+  P.addEventListener('input', () => { clearTimeout(procT); procT = setTimeout(syncProc, 250); });
   $('#xprocAdd').onclick = async () => {
     const inp = $('#xprocNew');
     let t = inp.value.trim().replace(/^\s*\d+\s*[.\-)]\s*/, '');
@@ -1790,7 +1860,7 @@ function viewReportForm(c) {
     if (!/[.!؟]$/.test(t)) t += '.';
     const list = S().extra_procs || DEF_EXTRA_PROCS.slice();
     if (!list.includes(t)) { S().extra_procs = list.concat(t); await save(); }
-    setVal(f.procedures_text, setProcLine(f.procedures_text.value, t, true));
+    setVal(P, setProcLine(P.value, t, true, pos()));
     setVal(inp, ''); drawX(); toast('أُضيف الإجراء للتقرير وحُفظ في القائمة');
   };
   let wantPrint = false;
