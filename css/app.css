@@ -27,7 +27,8 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: 'Tajawal', 'Segoe UI', Tahoma, sans-serif;
   background: var(--bg); color: var(--ink);
-  direction: rtl; font-size: 15px; min-height: 100vh; font-weight: 500;
+  direction: rtl; font-size: 15px; min-height: 100vh; font-weight: 700;
+  -webkit-font-smoothing: antialiased;
 }
 a { color: var(--green); text-decoration: none; }
 button { font-family: inherit; }
@@ -218,11 +219,11 @@ tr.clickable { cursor: pointer; }
 @media (max-width: 760px) {
   :root { --navh: calc(62px + env(safe-area-inset-bottom)); --muted: #222b26; --line: #c3cfc8; }
   body { font-size: 16px; padding-bottom: var(--navh); }
-  /* خط Tajawal الرفيع يبدو باهتًا على شاشات الجوال: وزن أثقل للنصوص الصغيرة */
-  .hint, .muted, .sigmode, td, .choice span, .kpi .l, .bottomnav a, .badge, th { font-weight: 700; }
-  .hint { font-size: 13.5px; }
-  .muted { font-size: 14px; }
-  .topbar .brand .tag { color: #fff; font-size: 12px; font-weight: 500; }
+  body { font-size: 17px; }
+  .hint { font-size: 14px; }
+  .muted { font-size: 14.5px; }
+  .bottomnav a { font-size: 13px; }
+  .topbar .brand .tag { color: #fff; font-size: 12px; font-weight: 700; }
   input::placeholder, textarea::placeholder { color: #5b665f; opacity: 1; }
   .topbar { height: 54px; padding: 0 14px; gap: 10px; }
   .topbar nav { display: none; }
@@ -286,3 +287,7 @@ tr.clickable { cursor: pointer; }
 }
 .tplitem { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: #fbfcfb; }
 body.remote { padding-bottom: 0 !important; }
+
+/* كل نصوص الواجهة بالخط العريض — في آخر الملف ليغلب الأوزان الأخف أعلاه (التقارير المطبوعة لها خطها في print.css) */
+.btn, input, select, textarea, textarea.amiri, th, td, .badge, .sigmode, .hint, .muted, .choice span, .kpi .l,
+.topbar nav a, .topbar .brand .tag, .bottomnav a, .jump button, .pinfo b, .note, .toast { font-weight: 700; }

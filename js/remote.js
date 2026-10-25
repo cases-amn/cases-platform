@@ -185,11 +185,12 @@ async function viewRemoteRequest(c, req) {
   const cl = $('#cpLink'); if (cl) cl.onclick = () => copyText(link, 'تم نسخ الرابط');
   const cc = $('#cpCode'); if (cc) cc.onclick = () => copyText(req.code, 'تم نسخ الرمز');
   const rf = $('#rsFile'); if (rf) rf.onchange = async e => { const fl = e.target.files[0]; if (fl) await importResponseFile(fl); };
-  const rc = $('#rqCancel'); if (rc) rc.onclick = async () => {
-    if (!confirm('إيقاف الرابط؟ لن تُقبل أي إفادة تصل عنه بعد الآن.')) return;
-    Object.assign(req, { status: 'cancelled', cancelled_at: Date.now() });
-    log('إيقاف رابط إفادة عن بُعد', 'قضية #' + c.id); await save(); toast('تم إيقاف الرابط'); route();
-  };
+  const rc = $('#rqCancel'); if (rc) rc.onclick = () => stopRemoteRequest(req);
+}
+async function stopRemoteRequest(req) {
+  if (!confirm('إيقاف الرابط؟ لن تُقبل أي إفادة تصل عنه بعد الآن.')) return;
+  Object.assign(req, { status: 'cancelled', cancelled_at: Date.now() });
+  log('إيقاف رابط إفادة عن بُعد', 'قضية #' + req.case_id); await save(); toast('تم إيقاف الرابط'); route();
 }
 
 // ========================= جهة المحقق: استلام الإفادة =========================

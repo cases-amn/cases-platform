@@ -506,7 +506,8 @@ function viewCase(c) {
           <td data-l="الطرف"><b>${esc(pName(r.party_id))}</b></td>
           <td data-l="ينتهي">${esc(fmtWhen(r.expires_at))}</td>
           <td data-l="الحالة"><span class="badge ${cls}">${t}</span></td>
-          <td class="actions-cell"><div class="btns"><a class="btn sm" href="#/case/${c.id}/remote/${r.id}">فتح</a></div></td></tr>`; }).join('')}
+          <td class="actions-cell"><div class="btns"><a class="btn sm" href="#/case/${c.id}/remote/${r.id}">فتح</a>
+            ${r.status === 'pending' ? `<button class="btn sm danger" data-rstop="${r.id}">إيقاف الرابط</button>` : ''}</div></td></tr>`; }).join('')}
       </table>` : '<div class="empty">أرسل للطرف رابطًا بالواتساب فيه أسئلتك، يجيب ويوقّع، ويعيد لك ملف الإفادة فيصير محضرًا في القضية</div>'}
       <div style="margin-top:14px"><a class="btn ghost" href="#/case/${c.id}/remote/new">+ طلب إفادة عن بُعد</a></div>
     </div>
@@ -609,6 +610,7 @@ function viewCase(c) {
     await save(); toast('تم حذف المرفق'); route();
   });
   $$('[data-lcopy]').forEach(b => b.onclick = () => copyText(byId('letters', b.dataset.lcopy).body.trim(), 'تم نسخ متن الخطاب'));
+  $$('[data-rstop]').forEach(b => b.onclick = () => stopRemoteRequest(byId('requests', b.dataset.rstop)));
   $$('[data-ldel]').forEach(b => b.onclick = async () => {
     if (!confirm('حذف الخطاب؟')) return;
     DB.letters = DB.letters.filter(x => x.id !== +b.dataset.ldel);

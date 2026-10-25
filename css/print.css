@@ -8,7 +8,7 @@ body.printview { background: #e9ecea; }
 
 .sheet {
   width: 210mm; background: #fff; color: #000; box-shadow: 0 2px 14px rgba(0,0,0,.25);
-  font-family: 'Amiri', 'Traditional Arabic', serif; direction: rtl; font-size: var(--fs, 15pt);
+  font-family: 'Amiri', 'Traditional Arabic', serif; direction: rtl; font-size: var(--fs, 15pt); font-weight: 400;
   /* حبر أسود أغمق وأعرض قليلًا من خط Amiri العادي */
   -webkit-text-stroke: .35px #000; -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
