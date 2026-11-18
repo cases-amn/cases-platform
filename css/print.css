@@ -77,7 +77,9 @@ table.pdata tr:hover td { background: none; }
   .pv-stage { padding: 0; overflow: visible; display: block !important; }
   .pv-scale { transform: none !important; width: auto !important; height: auto !important; margin: 0; }
   .sheet { box-shadow: none; margin: 0; }
-  .sheet.flow { width: auto; min-height: 0; padding: 0; }
+  /* هامش الصفحة صفر (PAGE_RULE) حتى لا يطبع المتصفح الرابط والتاريخ في الهامش؛
+     والهامش الفعلي حشوة داخل الورقة تتكرر في كل صفحة */
+  .sheet.flow { width: auto; min-height: 0; padding: 8mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   .qa { orphans: 3; widows: 3; }
   .sheet .head { break-inside: avoid; }
 }

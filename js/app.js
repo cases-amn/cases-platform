@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 24;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 25;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -1200,7 +1200,8 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
 }
 
 // كل الأوراق المطبوعة «متدفقة» بهامش الصفحة 8mm وبلا ارتفاع ثابت، فلا تخرج صفحة ثانية فارغة أبدًا
-const PAGE_RULE = '@page { size: A4 portrait; margin: 8mm; }';
+// margin: 0 يمنع المتصفح من طباعة الرابط والتاريخ أسفل/أعلى الصفحة (الهامش الفعلي 8mm داخل الورقة — print.css)
+const PAGE_RULE = '@page { size: A4 portrait; margin: 0; }';
 /** تصغير الخط تدريجيًا حتى تتسع الورقة لصفحة A4 واحدة.
  *  canFlow: إن لم تتسع حتى بأصغر خط يُعاد الخط الطبيعي ويكمل النص في صفحة ثانية (المحاضر)؛
  *  وإلا يبقى أصغر خط (التقرير والخطاب: صفحة واحدة دائمًا) */
@@ -1225,6 +1226,7 @@ function rankName(rank, name) {
 function viewReportPrint(c) {
   const r = DB.reports.find(x => x.case_id === c.id);
   if (!r) { location.hash = '#/case/' + c.id + '/report'; return; }
+  fixReportNat(c, r);
   const sec = (h, b) => `<div class="sec"><div class="h">${h}</div><div class="b">${esc((b || '').trim())}</div></div>`;
   const signer = (role, t, rk, nm) => `<div class="role">${role}</div><div>${esc(t)}</div>${rankName(rk, nm)}`;
   const html = `<div class="sheet flow" id="sheet"><div class="inner">
@@ -1289,7 +1291,27 @@ function buildRefText(c, parties) {
   return t + '.';
 }
 // ---- خطاب التغطية ----
-const isCitizen = p => !p.nationality || /سعودي/.test(p.nationality);
+const isCitizen = p => !(p.nationality || '').trim() || /سعود|saudi|ksa/i.test(p.nationality);
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** يصحح نصوص تقرير محفوظ ويحفظه إن تغيّر */
+function fixReportNat(c, r) {
+  let ch = false;
+  for (const k of ['ref_text', 'procedures_text', 'result_text', 'opinion_text']) {
+    const v = fixNatText(c, r[k]);
+    if (v !== r[k]) { r[k] = v; ch = true; }
+  }
+  if (ch) save();
+}
+/** تصحيح النصوص المحفوظة سابقًا: «سعودي / فلان» أو «الجنسية / فلان» تصير «المواطن/ فلان» أو «المقيم/ فلان» */
+function fixNatText(c, txt) {
+  if (!txt) return txt;
+  DB.parties.filter(p => p.case_id === c.id && (p.name || '').trim()).forEach(p => {
+    const words = [...new Set([(p.nationality || '').trim(), 'السعودية', 'السعودي', 'سعودية', 'سعودي', 'سعودى'].filter(Boolean))].map(reEsc).join('|');
+    // يُسمح بحرف «و» قبل الجنسية («وباكستاني / فلان») ويُحفظ
+    txt = txt.replace(new RegExp(`(?<![\\u0600-\\u0647\\u0649-\\u06FF])(?:${words})\\s*/\\s*${reEsc(p.name.trim())}`, 'g'), partyLabel(p));
+  });
+  return txt;
+}
 function partyLabel(p) {
   const f = p.gender === 'أنثى';
   return (isCitizen(p) ? (f ? 'المواطنة' : 'المواطن') : (f ? 'المقيمة' : 'المقيم')) + '/ ' + p.name;
@@ -1759,6 +1781,7 @@ function viewReportForm(c) {
   const parties = DB.parties.filter(p => p.case_id === c.id);
   let r = DB.reports.find(x => x.case_id === c.id);
   const isNew = !r;
+  if (r) fixReportNat(c, r);
   if (!r) {
     const s = S();
     r = { case_id: c.id, report_number: '', report_date: hijriToday(), attachments_note: '', subject_line: c.subject || '',
