@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 25;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 26;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -1176,7 +1176,8 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
   }
   app().innerHTML = `<div class="pv-bar">
       ${BACK_BTN}
-      <button class="btn gold" id="doPrint">🖨 طباعة / حفظ PDF</button>
+      <button class="btn gold" id="doPdf">📄 ملف PDF (بدون رابط)</button>
+      <button class="btn" id="doPrint">🖨 طباعة مباشرة</button>
       <a class="btn ghost" href="${back[0]}">${back[1]}</a>
       <a class="btn ghost" href="${parentHash()}">ملف القضية</a>
       <span class="info" id="pvInfo">${info || ''}</span></div>
@@ -1184,6 +1185,7 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
   const st = document.createElement('style'); st.id = 'pagerule'; st.textContent = pageRule;
   document.head.appendChild(st);
   $('#doPrint').onclick = () => window.print();
+  $('#doPdf').onclick = () => sheetPdfFlow($('.sheet', app()), document.title || 'مستند');
   const scaler = () => {
     const sc = $('#pvScale'); if (!sc) return;
     const sheet = $('.sheet', sc);
@@ -1197,6 +1199,108 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
   onLeave(() => window.removeEventListener('resize', scaler));
   const imgsLoaded = () => Promise.all($$('img', app()).map(i => i.complete ? null : new Promise(r => { i.onload = i.onerror = r; })));
   return { scaler, ready: Promise.all([hydrateImages(app()).then(imgsLoaded), document.fonts ? document.fonts.ready : null]) };
+}
+
+// ---- ملف PDF تبنيه المنصة بنفسها ----
+// طباعة صفحة الويب في سفاري الآيفون تضيف دائمًا رابط الموقع والتاريخ، ولا يمكن منعها من الصفحة.
+// لذلك نرسم الورقة صورةً عالية الدقة ونضعها في ملف PDF بصفحات A4 (هامش 8mm)، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
+let h2cLoad = null;
+const loadH2C = () => h2cLoad || (h2cLoad = new Promise((res, rej) => {
+  const s = document.createElement('script'); s.src = 'js/html2canvas.min.js';
+  s.onload = () => res(window.html2canvas); s.onerror = () => { h2cLoad = null; rej(new Error('تعذّر تحميل أداة PDF')); };
+  document.head.appendChild(s);
+}));
+/** صف أبيض بالكامل قرب نهاية الصفحة، حتى لا ينقطع سطر بين صفحتين */
+function pdfBreakAt(cv, from, to) {
+  const ctx = cv.getContext('2d'), h = to - from;
+  if (h <= 0) return to;
+  const d = ctx.getImageData(0, from, cv.width, h).data, w = cv.width * 4;
+  for (let y = h - 1; y > h * 0.55; y--) {
+    let blank = true;
+    for (let x = 0; x < w; x += 8) if (d[y * w + x] < 235 || d[y * w + x + 1] < 235 || d[y * w + x + 2] < 235) { blank = false; break; }
+    if (blank) return from + y;
+  }
+  return to;
+}
+/** ملف PDF بسيط: كل صفحة صورة JPEG بحجم A4 */
+function buildPdf(pages) {
+  const enc = new TextEncoder(), parts = [], offs = [];
+  let len = 0;
+  const put = x => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+  const obj = (n, body) => { offs[n] = len; put(`${n} 0 obj\n`); body(); put('\nendobj\n'); };
+  const W = 595.28, H = 841.89, n = pages.length;
+  put('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  obj(1, () => put('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => put(`<< /Type /Pages /Count ${n} /Kids [${pages.map((p, i) => `${3 + i * 3} 0 R`).join(' ')}] >>`));
+  pages.forEach((p, i) => {
+    const pg = 3 + i * 3, im = pg + 1, ct = pg + 2;
+    obj(pg, () => put(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /I${i} ${im} 0 R >> >> /Contents ${ct} 0 R >>`));
+    obj(im, () => { put(`<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpg.length} >>\nstream\n`); put(p.jpg); put('\nendstream'); });
+    const cs = `q ${W} 0 0 ${H} 0 0 cm /I${i} Do Q`;
+    obj(ct, () => put(`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`));
+  });
+  const xref = len, total = 3 + n * 3;
+  put(`xref\n0 ${total}\n0000000000 65535 f \n`);
+  for (let k = 1; k < total; k++) put(String(offs[k]).padStart(10, '0') + ' 00000 n \n');
+  put(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+async function sheetToPdf(sheet) {
+  const h2c = await loadH2C();
+  if (document.fonts) await document.fonts.ready;
+  const inner = $('.inner', sheet), sc = $('#pvScale');
+  const keep = sc ? [sc.style.transform, sc.style.height] : null;
+  if (sc) { sc.style.transform = 'none'; sc.style.height = 'auto'; }
+  let cv;
+  try {
+    // 3 بكسل لكل بكسل شاشة ≈ 290 نقطة في البوصة: نص واضح عند الطباعة
+    // (وأقل قليلًا للمحاضر الطويلة: سفاري لا يرسم لوحة أكبر من نحو 16 مليون بكسل)
+    const r = inner.getBoundingClientRect(), scale = Math.min(3, Math.sqrt(15e6 / (r.width * r.height)));
+    cv = await h2c(inner, { scale, backgroundColor: '#ffffff', logging: false, useCORS: true });
+  } finally { if (sc) { sc.style.transform = keep[0]; sc.style.height = keep[1]; } }
+  const pxmm = cv.width / (inner.getBoundingClientRect().width / (96 / 25.4));   // بكسل لكل مم
+  const M = 8, pageW = Math.round(210 * pxmm), pageH = Math.round(297 * pxmm), bodyH = Math.floor((297 - 2 * M) * pxmm);
+  const pages = [];
+  for (let y = 0; y < cv.height - 2;) {
+    let end = Math.min(cv.height, y + bodyH);
+    if (end < cv.height) end = pdfBreakAt(cv, y, end);
+    const pc = document.createElement('canvas'); pc.width = pageW; pc.height = pageH;
+    const ctx = pc.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pageW, pageH);
+    ctx.drawImage(cv, 0, y, cv.width, end - y, Math.round(M * pxmm), Math.round(M * pxmm), cv.width, end - y);
+    const b64 = pc.toDataURL('image/jpeg', 0.92).split(',')[1], bin = atob(b64), jpg = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) jpg[i] = bin.charCodeAt(i);
+    pages.push({ jpg, w: pageW, h: pageH });
+    y = end;
+  }
+  return buildPdf(pages);
+}
+/** يبني الملف ثم يعرض «حفظ / مشاركة» (المشاركة في الآيفون يجب أن تكون بضغطة مباشرة من المستخدم) */
+async function sheetPdfFlow(sheet, title) {
+  const name = (title || 'مستند').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() + '.pdf';
+  const btn = $('#doPdf'), label = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ جارٍ تجهيز الملف...';
+  let blob;
+  try { blob = await sheetToPdf(sheet); }
+  catch (e) { toast('تعذّر إنشاء ملف PDF: ' + (e.message || e)); return; }
+  finally { btn.disabled = false; btn.textContent = label; }
+  const file = new File([blob], name, { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const canShare = navigator.canShare && navigator.canShare({ files: [file] });
+  const bg = modal(`<h3 style="margin-bottom:8px">ملف PDF جاهز</h3>
+    <div class="muted" style="margin-bottom:14px; line-height:1.7">${esc(name)}<br>الملف بلا رابط الموقع. احفظه في «الملفات» داخل مجلد «الإفادات والإجراءات»، أو اختر «طباعة» من قائمة المشاركة.</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap">
+      ${canShare ? '<button class="btn gold" id="pdfShare">مشاركة / حفظ / طباعة</button>' : ''}
+      <a class="btn ${canShare ? 'ghost' : 'gold'}" id="pdfDl" href="${url}" download="${esc(name)}">تنزيل الملف</a>
+      <a class="btn ghost" href="${url}" target="_blank" rel="noopener">فتح الملف</a>
+      <button class="btn ghost" id="pdfClose">إغلاق</button></div>`);
+  const close = () => { bg.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); };
+  $('#pdfClose', bg).onclick = close;
+  const sh = $('#pdfShare', bg);
+  if (sh) sh.onclick = async () => {
+    try { await navigator.share({ files: [file], title: name.replace(/\.pdf$/, '') }); close(); }
+    catch (e) { if (e && e.name !== 'AbortError') toast('تعذّرت المشاركة — استخدم «تنزيل الملف»'); }
+  };
 }
 
 // كل الأوراق المطبوعة «متدفقة» بهامش الصفحة 8mm وبلا ارتفاع ثابت، فلا تخرج صفحة ثانية فارغة أبدًا
