@@ -503,5 +503,100 @@
     return { blob: new Blob(parts, { type: 'application/pdf' }), pages: pages.length };
   }
 
-  window.PDFGEN = { make, shapeWord, collect, paginate };
+  // ---------------- ملف PDF من صور الصفحات ----------------
+  // بعض الخطوط المرفوعة (مثل نسخ ويندوز من Times New Roman) لا يعرضها عارض PDF في الآيفون
+  // حين تُضمَّن نصًا، فتظهر حروفها مربعات. لذلك تُرسم كل صفحة صورةً بالمتصفح نفسه وبالخط المعروض نفسه
+  // (يصل المتصفح الحروف ويرتّبها كما على الشاشة)، ثم تُضمَّن الصور في الملف بدقة طباعة ~300 نقطة/بوصة.
+  const RASTER_K = 3;   // بكسل الصورة لكل بكسل CSS (٢٨٨ نقطة/بوصة)
+  async function makeRaster(root) {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    const doc = collect(root);
+    const pages = paginate(doc);
+    const scale = Math.min(1, (210 - 2 * MARGIN_MM) * MM / doc.width);
+    const pw = Math.round(210 * MM * RASTER_K), ph = Math.round(297 * MM * RASTER_K), mg = MARGIN_MM * MM;
+    const css = c => `rgb(${c.split(' ').map(v => Math.round(+v * 255)).join(',')})`;
+    const jpegs = [];
+    for (const [p0, p1] of pages) {
+      const cv = document.createElement('canvas');
+      cv.width = pw; cv.height = ph;
+      const g = cv.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, pw, ph);
+      // إحداثيات الورقة (بكسل CSS) ← الصفحة
+      g.setTransform(RASTER_K * scale, 0, 0, RASTER_K * scale, RASTER_K * mg, RASTER_K * mg - RASTER_K * scale * p0);
+      g.save();
+      g.beginPath(); g.rect(-4, p0 - 1, doc.width + 8, p1 - p0 + 2); g.clip();
+      const vis = (y, h) => y + h > p0 - 0.5 && y < p1 + 0.5;
+      for (const b of doc.boxes) if (b.type === 'bg' && vis(b.y, b.h)) { g.fillStyle = css(b.color); g.fillRect(b.x, b.y, b.w, b.h); }
+      for (const b of doc.boxes) if (b.type === 'border' && vis(b.y, b.h)) {
+        const h = b.bw / 2;
+        g.strokeStyle = css(b.color); g.lineWidth = b.bw;
+        g.setLineDash(b.style === 'dotted' ? [0.01, b.bw * 2.2] : b.style === 'dashed' ? [b.bw * 3, b.bw * 2] : []);
+        g.lineCap = b.style === 'dotted' ? 'round' : 'butt';
+        g.beginPath();
+        if (b.side === 'top') { g.moveTo(b.x, b.y + h); g.lineTo(b.x + b.w, b.y + h); }
+        else if (b.side === 'bottom') { g.moveTo(b.x, b.y + b.h - h); g.lineTo(b.x + b.w, b.y + b.h - h); }
+        else if (b.side === 'left') { g.moveTo(b.x + h, b.y); g.lineTo(b.x + h, b.y + b.h); }
+        else { g.moveTo(b.x + b.w - h, b.y); g.lineTo(b.x + b.w - h, b.y + b.h); }
+        g.stroke();
+      }
+      g.setLineDash([]); g.lineCap = 'butt';
+      for (const im of doc.images) if (vis(im.y, im.h)) { try { g.drawImage(im.el, im.x, im.y, im.w, im.h); } catch (e) { /* صورة غير جاهزة */ } }
+      // خط تحت العناوين المسطّرة
+      const lines = new Map(), ids = new Map();
+      for (const w of doc.words) if (w.deco && w.base >= p0 && w.base < p1) {
+        if (!ids.has(w.deco)) ids.set(w.deco, ids.size);
+        const key = ids.get(w.deco) + '|' + Math.round(w.base);
+        const l = lines.get(key) || { x0: Infinity, x1: -Infinity, base: w.base, fs: w.fs, color: w.color };
+        l.x0 = Math.min(l.x0, w.x); l.x1 = Math.max(l.x1, w.x + w.w); lines.set(key, l);
+      }
+      for (const l of lines.values()) {
+        g.strokeStyle = css(l.color); g.lineWidth = Math.max(0.6, l.fs * 0.055);
+        g.beginPath(); g.moveTo(l.x0, l.base + l.fs * 0.13); g.lineTo(l.x1, l.base + l.fs * 0.13); g.stroke();
+      }
+      // النص: كل كلمة في موضعها، بخطها، يرسمها المتصفح نفسه
+      g.direction = 'rtl'; g.textAlign = 'right'; g.textBaseline = 'alphabetic';
+      for (const w of doc.words) {
+        if (w.base < p0 || w.base >= p1) continue;
+        g.font = `${w.bold ? 700 : 400} ${w.fs}px "${w.fam}", serif`;
+        const m = g.measureText(w.t).width;
+        const sx = m > 0 ? Math.max(0.7, Math.min(1.3, w.w / m)) : 1;
+        g.save();
+        g.translate(w.x + w.w, w.base); g.scale(sx, 1);
+        g.fillStyle = css(w.color);
+        g.fillText(w.t, 0, 0);
+        if (w.stroke > 0) { g.strokeStyle = css(w.color); g.lineWidth = w.stroke; g.lineJoin = 'round'; g.strokeText(w.t, 0, 0); }
+        g.restore();
+      }
+      g.restore();
+      const bin = atob(cv.toDataURL('image/jpeg', 0.92).split(',')[1]), a = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+      jpegs.push(a);
+      cv.width = cv.height = 1;   // تحرير ذاكرة الآيفون
+    }
+    // ---- الملف: صفحة لكل صورة ----
+    const objs = [], add = p => { objs.push(p); return objs.length; }, str = s => enc.encode(s);
+    const catalog = add(null), pagesObj = add(null), pageRefs = [];
+    for (const a of jpegs) {
+      const im = add([str(`<< /Type /XObject /Subtype /Image /Width ${pw} /Height ${ph} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${a.length} >>\nstream\n`), a, str('\nendstream')]);
+      const c = str(`q ${PAGE_W} 0 0 ${PAGE_H} 0 0 cm /Im0 Do Q`);
+      const ct = add([str(`<< /Length ${c.length} >>\nstream\n`), c, str('\nendstream')]);
+      pageRefs.push(add([str(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] /Resources << /XObject << /Im0 ${im} 0 R >> >> /Contents ${ct} 0 R >>`)]));
+    }
+    objs[catalog - 1] = [str(`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`)];
+    objs[pagesObj - 1] = [str(`<< /Type /Pages /Count ${pageRefs.length} /Kids [${pageRefs.map(r => r + ' 0 R').join(' ')}] >>`)];
+    const parts = [str('%PDF-1.4\n%âãÏÓ\n')];
+    let len = parts[0].length;
+    const offs = [];
+    objs.forEach((o, i) => {
+      offs[i] = len;
+      for (const p of [str(`${i + 1} 0 obj\n`), ...o, str('\nendobj\n')]) { parts.push(p); len += p.length; }
+    });
+    let x = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+    offs.forEach(o => { x += String(o).padStart(10, '0') + ' 00000 n \n'; });
+    x += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${len}\n%%EOF`;
+    parts.push(str(x));
+    return { blob: new Blob(parts, { type: 'application/pdf' }), pages: pages.length };
+  }
+
+  window.PDFGEN = { make, makeRaster, shapeWord, collect, paginate };
 })();
