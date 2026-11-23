@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 30;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 31;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -1247,7 +1247,7 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
 
 // ---- ملف PDF تبنيه المنصة بنفسها ----
 // طباعة صفحة الويب في سفاري الآيفون تضيف دائمًا رابط الموقع والتاريخ، ولا يمكن منعها من الصفحة.
-// لذلك تبني المنصة ملف PDF بنص حقيقي وبالخطوط المعروضة نفسها مضمَّنة (js/pdfgen.js)، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
+// لذلك تبني المنصة ملف PDF بنفسها (js/pdfgen.js): كل صفحة صورة بدقة طباعة مرسومة بالخطوط المعروضة، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
 let pdfLoad = null;
 const loadPdfGen = () => pdfLoad || (pdfLoad = new Promise((res, rej) => {
   const s = document.createElement('script'); s.src = 'js/pdfgen.js?v=' + APP_VERSION;
@@ -1258,7 +1258,8 @@ async function sheetToPdf(sheet) {
   const gen = await loadPdfGen();
   const sc = $('#pvScale'), keep = sc ? [sc.style.transform, sc.style.height] : null;
   if (sc) { sc.style.transform = 'none'; sc.style.height = 'auto'; }
-  try { return (await gen.make($('.inner', sheet))).blob; }
+  // صفحات مرسومة صورًا بدقة طباعة: تظهر في أي عارض (الآيفون وغيره) مطابقة للمعاينة وبأي خط مرفوع
+  try { return (await gen.makeRaster($('.inner', sheet))).blob; }
   finally { if (sc) { sc.style.transform = keep[0]; sc.style.height = keep[1]; } }
 }/** يبني الملف ثم يعرض «حفظ / مشاركة» (المشاركة في الآيفون يجب أن تكون بضغطة مباشرة من المستخدم) */
 async function sheetPdfFlow(sheet, title) {
