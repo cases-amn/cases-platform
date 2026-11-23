@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 29;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 30;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -1018,7 +1018,7 @@ function qaHTML(text, sigs) {
     else if (isQ(l)) inA = false;
     else if (inA && l.trim()) ends[ai] = i;
   });
-  const out = lines.map(esc);
+  const out = lines.map(l => esc(l).replace(/^(\s*)([سج]\s*\/)/, '$1<b class="qm">$2</b>'));
   (sigs || []).forEach((p, k) => {
     if (p && k < ai && ends[k] != null) out[ends[k]] = out[ends[k]].trimEnd() + ` <img class="asig" data-file="${esc(p)}" alt="">`;
   });
@@ -1294,14 +1294,14 @@ const PAGE_RULE = '@page { size: A4 portrait; margin: 0; }';
 /** تصغير الخط تدريجيًا حتى تتسع الورقة لصفحة A4 واحدة.
  *  canFlow: إن لم تتسع حتى بأصغر خط يُعاد الخط الطبيعي ويكمل النص في صفحة ثانية (المحاضر)؛
  *  وإلا يبقى أصغر خط (التقرير والخطاب: صفحة واحدة دائمًا) */
-function fitPage(sheet, maxPt, minPt, canFlow) {
+function fitPage(sheet, maxPt, minPt, canFlow, flowPt) {
   const inner = $('.inner', sheet), mm = 96 / 25.4;
   const avail = (297 - 16 - 4) * mm;   // ارتفاع الصفحة ناقص الهوامش ومسافة أمان
   const set = v => sheet.style.setProperty('--fs', v + 'pt');
   let fs = maxPt; set(fs);
   while (inner.offsetHeight > avail && fs > minPt) { fs = Math.round((fs - 0.25) * 100) / 100; set(fs); }
   const fits = inner.offsetHeight <= avail;
-  if (!fits && canFlow) { fs = maxPt; set(fs); }
+  if (!fits && canFlow) { fs = flowPt || maxPt; set(fs); }
   return { fs, fits, pages: fits ? 1 : Math.ceil(inner.offsetHeight / ((297 - 16) * mm)) };
 }
 const pagesInfo = res => res.fits ? 'صفحة A4 واحدة' : `${res.pages} صفحات A4 — النص أطول من صفحة واحدة`;
@@ -1326,7 +1326,7 @@ function viewReportPrint(c) {
       <div class="plist">${d.items.map((it, i) => `<div class="pi"><span class="pn">${i + 1}.</span><span class="pt">${esc(it.join('\n').trim())}</span></div>`).join('')}</div></div>`;
   };
   const signer = (role, t, rk, nm) => `<div class="role">${role}</div><div>${esc(t)}</div>${rankName(rk, nm)}`;
-  const html = `<div class="sheet flow rep" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow offdoc rep" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(r.report_number)], ['التاريخ :', esc(r.report_date) + (r.report_date ? 'هـ' : '')],
                  ['المشفوعات :', esc(r.attachments_note)], ['الموضوع :', esc(r.subject_line)]])}
     <div class="ptitle"><span>${esc(S().report_title || '( تقييم إجراءات قضية )')}</span></div>
@@ -1350,7 +1350,7 @@ function viewReportPrint(c) {
 
 function viewStatementPrint(c, st) {
   const p = byId('parties', st.party_id) || {};
-  const html = `<div class="sheet flow" id="sheet" style="--fs:14.5pt"><div class="inner">
+  const html = `<div class="sheet flow offdoc" id="sheet" style="--fs:16pt"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( ${esc(datedTitle('محضر سماع أقوال', st.statement_date))} )</span></div>
@@ -1372,7 +1372,8 @@ function viewStatementPrint(c, st) {
     </div></div></div>`;
   const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], PAGE_RULE, '',
     `محضر سماع أقوال - ${p.name || ''}`);
-  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 14.5, 11.5, true)); pv.scaler(); });
+  // نفس أسلوب التقرير الرسمي: خط 18 ويُصغَّر لصفحة واحدة، وإن طال المحضر يكمل بخط 16 في صفحة ثانية
+  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 18, 12, true, 16)); pv.scaler(); });
 }
 
 // ========================= تقرير تقييم الإجراءات =========================
@@ -1565,7 +1566,7 @@ function viewLetterPrint(c, l) {
   const x = senders()[l.sender] || senders().assist;
   const to = (l.to || '').trim();
   const toLine = !to ? 'سعادة / ...................................................' : /^(سعادة|معالي|صاحب|فضيلة)/.test(to) ? to : 'سعادة ' + to;
-  const html = `<div class="sheet flow" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow offdoc" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(l.letter_number)], ['التاريخ :', esc(l.letter_date) + (l.letter_date ? 'هـ' : '')], ['المشفوعات :', esc(l.attachments)]])}
     <div class="lt-to"><span>${esc(toLine)}</span><span>المحترم</span></div>
     <div class="lt-body">${esc((l.body || '').trim())}</div>
@@ -1574,8 +1575,8 @@ function viewLetterPrint(c, l) {
   const pv = printShell(html, ['#/case/' + c.id + '/letter/' + l.id, 'تعديل الخطاب'], PAGE_RULE, '',
     `${LETTER_TYPES[l.type] ? LETTER_TYPES[l.type].label : 'خطاب'} - قضية ${c.case_number || c.id}`);
   pv.ready.then(() => {
-    const res = fitPage($('#sheet'), 16, 10, false);
-    $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
+    const res = fitPage($('#sheet'), 18, 10, false);
+    $('#pvInfo').textContent = res.fits ? `صفحة A4 واحدة — حجم الخط ${res.fs}` : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
     pv.scaler();
   });
 }
@@ -1780,7 +1781,7 @@ function viewStatementShow(c, st) {
 
 function viewRecordPrint(c, r) {
   const sig = r.no_sig ? '' : S().taker_sig;
-  const html = `<div class="sheet flow" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow offdoc" id="sheet"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number || '')], ['التاريخ :', esc(r.record_date) + (r.record_date ? 'هـ' : '')], ['الموضوع :', esc(recordTitle(r))]])}
     <div class="ptitle"><span>( ${esc(datedTitle(recordTitle(r), r.record_date))} )</span></div>
     <div class="lt-body tight">${tightText(r.body)}</div>
@@ -1792,7 +1793,7 @@ function viewRecordPrint(c, r) {
   const p = byId('parties', r.party_id) || DB.parties.find(x => x.case_id === c.id && x.party_role === 'مدعي');
   const who = (r.party_id && p ? p.name : (r.place || '').trim() || (p ? p.name : '')) || 'قضية ' + (c.case_number || c.id);
   const pv = printShell(html, ['#/case/' + c.id + '/record/' + r.id, 'تعديل المحضر'], PAGE_RULE, '', `${recordTitle(r)} - ${who}`);
-  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 16, 12, true)); pv.scaler(); });
+  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 18, 12, true, 16)); pv.scaler(); });
 }
 
 // ---- صيغ النتيجة والمرئيات ----

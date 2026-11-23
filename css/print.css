@@ -105,9 +105,16 @@ table.pdata tr:hover td { background: none; }
 /* الترويسة بالكحلي كما في القالب الرسمي (لكل المستندات) */
 .sheet .basmala, .sheet .head .org, .sheet .head .meta { color: #002060; }
 .sheet .head .meta .dots { border-bottom-color: #002060; }
+/* ---- أسلوب المستندات الرسمية (offdoc): التقرير والمحاضر والخطابات ---- */
 /* العنوان عريض في الوسط بلا خط تحته */
-.rep .ptitle span { border-bottom: 0; padding: 0; }
-.rep .ptitle { margin: .5em 0 .4em; }
+.offdoc .ptitle span { border-bottom: 0; padding: 0; }
+.offdoc .ptitle { margin: .5em 0 .4em; }
+/* أسطر متقاربة كالقالب الرسمي (مسافة مفردة) */
+.offdoc .intro, .offdoc .qa, .offdoc .lt-body, .offdoc .lt-body.tight { line-height: 1.45; }
+.offdoc .qa .qm { font-weight: 700; }
+.offdoc .lt-to { margin: .9em 0 .5em; }
+/* أسماء الأدوار في التوقيعات بلا خط تحتها */
+.offdoc .sigbox .role { text-decoration: none; }
 /* «الموضوع:-» عريض في أول الفقرة */
 .rep .sec .hi { font-weight: 700; }
 .rep .sec .h { line-height: 1.45; }
@@ -117,6 +124,4 @@ table.pdata tr:hover td { background: none; }
 .rep .plist .pi { display: flex; align-items: baseline; line-height: 1.45; text-align: justify; }
 .rep .plist .pn { flex: none; width: 1.9em; padding-inline-start: .55em; }
 .rep .plist .pt { flex: 1; white-space: pre-wrap; }
-/* التوقيعات: أسماء الأدوار بلا خط تحتها */
-.rep .sigbox .role { text-decoration: none; }
 .rep .sigs { margin-top: 1.4em; }
