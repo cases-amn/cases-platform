@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 28;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 29;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -1316,13 +1316,21 @@ function viewReportPrint(c) {
   const r = DB.reports.find(x => x.case_id === c.id);
   if (!r) { location.hash = '#/case/' + c.id + '/report'; return; }
   fixReportNat(c, r);
+  // نفس شكل التقرير الرسمي: «الموضوع:-» في أول الفقرة، والعناوين بـ «:-»، والإجراءات قائمة مرقّمة بمسافة معلّقة
   const sec = (h, b) => `<div class="sec"><div class="h">${h}</div><div class="b">${esc((b || '').trim())}</div></div>`;
+  const inl = (h, b) => `<div class="sec"><div class="b"><span class="hi">${h}</span> ${esc((b || '').trim())}</div></div>`;
+  const procs = (h, b) => {
+    const d = procItems(b);
+    if (!d.items.length) return sec(h, b);
+    return `<div class="sec"><div class="h">${h}</div>${d.pre.length ? `<div class="b">${esc(d.pre.join('\n').trim())}</div>` : ''}
+      <div class="plist">${d.items.map((it, i) => `<div class="pi"><span class="pn">${i + 1}.</span><span class="pt">${esc(it.join('\n').trim())}</span></div>`).join('')}</div></div>`;
+  };
   const signer = (role, t, rk, nm) => `<div class="role">${role}</div><div>${esc(t)}</div>${rankName(rk, nm)}`;
-  const html = `<div class="sheet flow" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow rep" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(r.report_number)], ['التاريخ :', esc(r.report_date) + (r.report_date ? 'هـ' : '')],
                  ['المشفوعات :', esc(r.attachments_note)], ['الموضوع :', esc(r.subject_line)]])}
     <div class="ptitle"><span>${esc(S().report_title || '( تقييم إجراءات قضية )')}</span></div>
-    ${sec('الإشارة :', r.ref_text)}${sec('الإجراءات :', r.procedures_text)}${sec('النتيجة :', r.result_text)}${sec('المرئيات :', r.opinion_text)}
+    ${inl('الموضوع:-', r.ref_text)}${procs('الإجراءات المتخذة:-', r.procedures_text)}${sec('التقييم :-', r.result_text)}${sec('المرئيات:-', r.opinion_text)}
     <div class="sigs">
       <div class="sig2">
         <div class="sigbox">${signer('معد التقرير', r.prepared_title, r.prepared_rank, r.prepared_name)}</div>
@@ -1334,7 +1342,7 @@ function viewReportPrint(c) {
   const pv = printShell(html, ['#/case/' + c.id + '/report', 'تعديل التقرير'], PAGE_RULE, '',
     `تقييم إجراءات قضية ${c.case_number || c.id}${cl ? ' - ' + cl.name : ''}`);
   pv.ready.then(() => {
-    const res = fitPage($('#sheet'), 15.5, 9, false);
+    const res = fitPage($('#sheet'), 18, 9, false);   // التقرير الرسمي بخط 18، ويُصغَّر إن طال النص
     $('#pvInfo').textContent = res.fits ? `صفحة A4 واحدة — حجم الخط ${res.fs}` : 'تنبيه: النص طويل جدًا ولا يتسع لصفحة واحدة حتى بأصغر خط، اختصر بعض الفقرات';
     pv.scaler();
   });
@@ -1893,10 +1901,10 @@ function viewReportForm(c) {
         <div class="field"><label>المشفوعات</label><input type="text" name="attachments_note" value="${esc(r.attachments_note)}"></div>
         <div class="field"><label>الموضوع</label><input type="text" name="subject_line" value="${esc(r.subject_line)}"></div>
       </div></div>
-    <div class="card"><h2>الإشارة <button type="button" class="btn sm ghost count" id="regenRef">إعادة التوليد</button></h2>
+    <div class="card"><h2>الموضوع <button type="button" class="btn sm ghost count" id="regenRef">إعادة التوليد</button></h2>
       <textarea name="ref_text" class="amiri" style="min-height:130px">${esc(r.ref_text)}</textarea>
       <div class="hint">تُولَّد تلقائيًا من بيانات القضية والأطراف — يمكنك تعديلها بحرية</div></div>
-    <div class="card"><h2>الإجراءات <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
+    <div class="card"><h2>الإجراءات المتخذة <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
       <textarea name="procedures_text" class="amiri" style="min-height:130px">${esc(r.procedures_text)}</textarea>
       <div class="hint">تُدرج محاضر سماع الأقوال ومحاضر الإجراءات مرقّمة — أضف أو عدّل ما تحتاجه</div>
       <div class="procord"><div class="xproc-h">ترتيب الإجراءات — حرّك أي إجراء بالأسهم</div><div id="procOrd"></div></div>
@@ -1906,11 +1914,11 @@ function viewReportForm(c) {
         <div class="xproc-add"><input type="text" id="xprocNew" placeholder="اكتب إجراءً آخر، مثال: جرى الاطلاع على سجل الموقوفين.">
           <button type="button" class="btn sm" id="xprocAdd">إضافة</button></div>
         <div class="hint">الإجراء الذي تكتبه يُحفظ في القائمة ليظهر في كل القضايا. اضغط ✕ لحذفه من القائمة.</div></div></div>
-    <div class="card"><h2>صيغة جاهزة للنتيجة والمرئيات</h2>
+    <div class="card"><h2>صيغة جاهزة للتقييم والمرئيات</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">${(S().report_templates || []).map((t, i) =>
         `<button type="button" class="btn ghost" data-tpl="${i}">${esc(t.name)}</button>`).join('') || '<span class="muted">لا توجد صيغ — أضفها من الإعدادات</span>'}</div>
       <div class="hint">تملأ «النتيجة» و«المرئيات» بأسماء أطراف هذه القضية، ثم تعدّلها كما تشاء. الصيغ تُعدَّل من «الإعدادات».</div></div>
-    <div class="card"><h2>النتيجة</h2>
+    <div class="card"><h2>التقييم</h2>
       <textarea name="result_text" class="amiri" placeholder="بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، لم يثبت وجود أي إساءة استخدام للسلطة من قبل رجل الأمن المذكور.">${esc(r.result_text)}</textarea></div>
     <div class="card"><h2>المرئيات</h2>
       <textarea name="opinion_text" class="amiri" style="min-height:90px" placeholder="حفظ الشكوى لعدم ثبوت ما يستوجب الاستمرار فيها.">${esc(r.opinion_text)}</textarea></div>
