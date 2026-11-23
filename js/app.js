@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 27;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 30;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -152,6 +152,49 @@ async function hydrateImages(root = document) {
   }));
 }
 function safeName(n) { return (n || 'file').replace(/[\\/:*?"<>|\s]+/g, '_').slice(-80); }
+
+// ---- خطوط المستندات والواجهة (js/fonts.js) ----
+async function loadDocFonts() {
+  try { await DOC_FONTS.load(p => Store.backend.getFile(p)); } catch (e) { console.warn('fonts', e); }
+}
+function fontsCardHTML() {
+  const names = S().doc_fonts || {};
+  return `<div class="card" id="fontsCard"><h2>خطوط التقارير والواجهة</h2>
+    <div class="hint" style="margin-bottom:10px">خطوط التقرير الرسمي تجارية فلا تأتي مع المنصة. ارفعها مرة واحدة من جهازك فتُستخدم في الواجهة وفي كل التقارير والمحاضر والخطابات وملفات PDF.
+      تُحفظ مع بياناتك ولا تُرفع للإنترنت. وإلى أن ترفعها يُستخدم خط مجاني قريب منها.</div>
+    ${DOC_FONTS.SLOTS.map(sl => {
+      const user = DOC_FONTS.state[sl.k] && DOC_FONTS.state[sl.k].user;
+      return `<div class="fontrow">
+        <div class="fr-info"><b>${esc(sl.label)}</b> <span class="muted">— ${esc(sl.ref)} (الملف ${esc(sl.file)})</span><br>
+          <span class="${user ? 'ok' : 'muted'}">${user ? '✔ مرفوع: ' + esc(names[sl.k] || sl.file) : 'غير مرفوع — يُستخدم البديل ' + esc(sl.fbName)}</span>
+          <div class="fr-sample" style="font-family:'${sl.fam}'; font-weight:${sl.weight}">بسم الله الرحمن الرحيم — تقييم إجراءات قضية ١٤٤٨هـ</div></div>
+        <div class="fr-acts"><label class="btn sm ghost" style="margin:0">${user ? 'استبدال' : 'رفع الخط'}<input type="file" data-font="${sl.k}" accept=".ttf,font/ttf,application/x-font-ttf,application/octet-stream" hidden></label>
+          ${user ? `<button type="button" class="btn sm danger" data-fontdel="${sl.k}">إزالة</button>` : ''}</div></div>`;
+    }).join('')}
+    <div class="hint">في ويندوز الخطوط في المجلد C:\\Windows\\Fonts — انسخ الملفات منه إلى سطح المكتب أولًا (times.ttf وtimesbd.ttf وarabtype.ttf، وملف MunaBlack من حيث ثبّتّه) ثم اخترها هنا. على الجوال: انقلها إليه، أو استورد نسخة احتياطية كاملة من الكمبيوتر فتنتقل الخطوط معها.</div></div>`;
+}
+function bindFontsCard() {
+  $$('[data-font]').forEach(inp => inp.onchange = async () => {
+    const file = inp.files[0], k = inp.dataset.font;
+    if (!file) return;
+    const buf = await file.arrayBuffer(), err = DOC_FONTS.validate(buf);
+    if (err) { toast(err, 'error'); inp.value = ''; return; }
+    try { await new FontFace('ChkFont', buf).load(); }
+    catch (e) { toast('المتصفح لم يقبل ملف الخط', 'error'); inp.value = ''; return; }
+    await putFile(DOC_FONTS.path(k), new Blob([buf], { type: 'font/ttf' }));
+    S().doc_fonts = Object.assign({}, S().doc_fonts, { [k]: file.name });
+    log('رفع خط', file.name); await save();
+    await loadDocFonts(); toast('تم رفع الخط واعتماده'); route();
+  });
+  $$('[data-fontdel]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.fontdel;
+    if (!confirm('إزالة هذا الخط والعودة للخط البديل؟')) return;
+    await delFile(DOC_FONTS.path(k));
+    const n = Object.assign({}, S().doc_fonts); n[k] = undefined; S().doc_fonts = JSON.parse(JSON.stringify(n));
+    log('إزالة خط'); await save();
+    await loadDocFonts(); route();
+  });
+}
 
 // ========================= البداية =========================
 const app = () => $('#app');
@@ -227,6 +270,7 @@ async function openData() {
     return;
   }
   if (!DB.cases.length && !DB.log.length) { log('إنشاء قاعدة البيانات', Store.backend.label); await save(); }
+  await loadDocFonts();
   if (S().lock_hash && sessionStorage.getItem('unlocked') !== S().lock_hash) return screenLock();
   startRouter();
 }
@@ -974,7 +1018,7 @@ function qaHTML(text, sigs) {
     else if (isQ(l)) inA = false;
     else if (inA && l.trim()) ends[ai] = i;
   });
-  const out = lines.map(esc);
+  const out = lines.map(l => esc(l).replace(/^(\s*)([سج]\s*\/)/, '$1<b class="qm">$2</b>'));
   (sigs || []).forEach((p, k) => {
     if (p && k < ai && ends[k] != null) out[ends[k]] = out[ends[k]].trimEnd() + ` <img class="asig" data-file="${esc(p)}" alt="">`;
   });
@@ -1203,7 +1247,7 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
 
 // ---- ملف PDF تبنيه المنصة بنفسها ----
 // طباعة صفحة الويب في سفاري الآيفون تضيف دائمًا رابط الموقع والتاريخ، ولا يمكن منعها من الصفحة.
-// لذلك تبني المنصة ملف PDF بنص حقيقي وخط Amiri مضمَّن (js/pdfgen.js)، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
+// لذلك تبني المنصة ملف PDF بنص حقيقي وبالخطوط المعروضة نفسها مضمَّنة (js/pdfgen.js)، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
 let pdfLoad = null;
 const loadPdfGen = () => pdfLoad || (pdfLoad = new Promise((res, rej) => {
   const s = document.createElement('script'); s.src = 'js/pdfgen.js?v=' + APP_VERSION;
@@ -1250,14 +1294,14 @@ const PAGE_RULE = '@page { size: A4 portrait; margin: 0; }';
 /** تصغير الخط تدريجيًا حتى تتسع الورقة لصفحة A4 واحدة.
  *  canFlow: إن لم تتسع حتى بأصغر خط يُعاد الخط الطبيعي ويكمل النص في صفحة ثانية (المحاضر)؛
  *  وإلا يبقى أصغر خط (التقرير والخطاب: صفحة واحدة دائمًا) */
-function fitPage(sheet, maxPt, minPt, canFlow) {
+function fitPage(sheet, maxPt, minPt, canFlow, flowPt) {
   const inner = $('.inner', sheet), mm = 96 / 25.4;
   const avail = (297 - 16 - 4) * mm;   // ارتفاع الصفحة ناقص الهوامش ومسافة أمان
   const set = v => sheet.style.setProperty('--fs', v + 'pt');
   let fs = maxPt; set(fs);
   while (inner.offsetHeight > avail && fs > minPt) { fs = Math.round((fs - 0.25) * 100) / 100; set(fs); }
   const fits = inner.offsetHeight <= avail;
-  if (!fits && canFlow) { fs = maxPt; set(fs); }
+  if (!fits && canFlow) { fs = flowPt || maxPt; set(fs); }
   return { fs, fits, pages: fits ? 1 : Math.ceil(inner.offsetHeight / ((297 - 16) * mm)) };
 }
 const pagesInfo = res => res.fits ? 'صفحة A4 واحدة' : `${res.pages} صفحات A4 — النص أطول من صفحة واحدة`;
@@ -1272,13 +1316,21 @@ function viewReportPrint(c) {
   const r = DB.reports.find(x => x.case_id === c.id);
   if (!r) { location.hash = '#/case/' + c.id + '/report'; return; }
   fixReportNat(c, r);
+  // نفس شكل التقرير الرسمي: «الموضوع:-» في أول الفقرة، والعناوين بـ «:-»، والإجراءات قائمة مرقّمة بمسافة معلّقة
   const sec = (h, b) => `<div class="sec"><div class="h">${h}</div><div class="b">${esc((b || '').trim())}</div></div>`;
+  const inl = (h, b) => `<div class="sec"><div class="b"><span class="hi">${h}</span> ${esc((b || '').trim())}</div></div>`;
+  const procs = (h, b) => {
+    const d = procItems(b);
+    if (!d.items.length) return sec(h, b);
+    return `<div class="sec"><div class="h">${h}</div>${d.pre.length ? `<div class="b">${esc(d.pre.join('\n').trim())}</div>` : ''}
+      <div class="plist">${d.items.map((it, i) => `<div class="pi"><span class="pn">${i + 1}.</span><span class="pt">${esc(it.join('\n').trim())}</span></div>`).join('')}</div></div>`;
+  };
   const signer = (role, t, rk, nm) => `<div class="role">${role}</div><div>${esc(t)}</div>${rankName(rk, nm)}`;
-  const html = `<div class="sheet flow" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow offdoc rep" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(r.report_number)], ['التاريخ :', esc(r.report_date) + (r.report_date ? 'هـ' : '')],
                  ['المشفوعات :', esc(r.attachments_note)], ['الموضوع :', esc(r.subject_line)]])}
     <div class="ptitle"><span>${esc(S().report_title || '( تقييم إجراءات قضية )')}</span></div>
-    ${sec('الإشارة :', r.ref_text)}${sec('الإجراءات :', r.procedures_text)}${sec('النتيجة :', r.result_text)}${sec('المرئيات :', r.opinion_text)}
+    ${inl('الموضوع:-', r.ref_text)}${procs('الإجراءات المتخذة:-', r.procedures_text)}${sec('التقييم :-', r.result_text)}${sec('المرئيات:-', r.opinion_text)}
     <div class="sigs">
       <div class="sig2">
         <div class="sigbox">${signer('معد التقرير', r.prepared_title, r.prepared_rank, r.prepared_name)}</div>
@@ -1290,7 +1342,7 @@ function viewReportPrint(c) {
   const pv = printShell(html, ['#/case/' + c.id + '/report', 'تعديل التقرير'], PAGE_RULE, '',
     `تقييم إجراءات قضية ${c.case_number || c.id}${cl ? ' - ' + cl.name : ''}`);
   pv.ready.then(() => {
-    const res = fitPage($('#sheet'), 15.5, 9, false);
+    const res = fitPage($('#sheet'), 18, 9, false);   // التقرير الرسمي بخط 18، ويُصغَّر إن طال النص
     $('#pvInfo').textContent = res.fits ? `صفحة A4 واحدة — حجم الخط ${res.fs}` : 'تنبيه: النص طويل جدًا ولا يتسع لصفحة واحدة حتى بأصغر خط، اختصر بعض الفقرات';
     pv.scaler();
   });
@@ -1298,7 +1350,7 @@ function viewReportPrint(c) {
 
 function viewStatementPrint(c, st) {
   const p = byId('parties', st.party_id) || {};
-  const html = `<div class="sheet flow" id="sheet" style="--fs:14.5pt"><div class="inner">
+  const html = `<div class="sheet flow offdoc" id="sheet" style="--fs:16pt"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number)],
                  ['التاريخ :', esc(st.statement_date) + (st.statement_date ? 'هـ' : '')], ['المكان :', esc(st.location)]])}
     <div class="ptitle"><span>( ${esc(datedTitle('محضر سماع أقوال', st.statement_date))} )</span></div>
@@ -1320,7 +1372,8 @@ function viewStatementPrint(c, st) {
     </div></div></div>`;
   const pv = printShell(html, ['#/case/' + c.id + '/statement/' + st.id, 'تعديل المحضر'], PAGE_RULE, '',
     `محضر سماع أقوال - ${p.name || ''}`);
-  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 14.5, 11.5, true)); pv.scaler(); });
+  // نفس أسلوب التقرير الرسمي: خط 18 ويُصغَّر لصفحة واحدة، وإن طال المحضر يكمل بخط 16 في صفحة ثانية
+  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 18, 12, true, 16)); pv.scaler(); });
 }
 
 // ========================= تقرير تقييم الإجراءات =========================
@@ -1513,7 +1566,7 @@ function viewLetterPrint(c, l) {
   const x = senders()[l.sender] || senders().assist;
   const to = (l.to || '').trim();
   const toLine = !to ? 'سعادة / ...................................................' : /^(سعادة|معالي|صاحب|فضيلة)/.test(to) ? to : 'سعادة ' + to;
-  const html = `<div class="sheet flow" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow offdoc" id="sheet"><div class="inner">
     ${printHead([['الرقــم :', esc(l.letter_number)], ['التاريخ :', esc(l.letter_date) + (l.letter_date ? 'هـ' : '')], ['المشفوعات :', esc(l.attachments)]])}
     <div class="lt-to"><span>${esc(toLine)}</span><span>المحترم</span></div>
     <div class="lt-body">${esc((l.body || '').trim())}</div>
@@ -1522,8 +1575,8 @@ function viewLetterPrint(c, l) {
   const pv = printShell(html, ['#/case/' + c.id + '/letter/' + l.id, 'تعديل الخطاب'], PAGE_RULE, '',
     `${LETTER_TYPES[l.type] ? LETTER_TYPES[l.type].label : 'خطاب'} - قضية ${c.case_number || c.id}`);
   pv.ready.then(() => {
-    const res = fitPage($('#sheet'), 16, 10, false);
-    $('#pvInfo').textContent = res.fits ? 'صفحة A4 واحدة' : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
+    const res = fitPage($('#sheet'), 18, 10, false);
+    $('#pvInfo').textContent = res.fits ? `صفحة A4 واحدة — حجم الخط ${res.fs}` : 'تنبيه: النص طويل ولا يتسع لصفحة واحدة';
     pv.scaler();
   });
 }
@@ -1728,7 +1781,7 @@ function viewStatementShow(c, st) {
 
 function viewRecordPrint(c, r) {
   const sig = r.no_sig ? '' : S().taker_sig;
-  const html = `<div class="sheet flow" id="sheet"><div class="inner">
+  const html = `<div class="sheet flow offdoc" id="sheet"><div class="inner">
     ${printHead([['القضية رقم :', esc(c.case_number || '')], ['التاريخ :', esc(r.record_date) + (r.record_date ? 'هـ' : '')], ['الموضوع :', esc(recordTitle(r))]])}
     <div class="ptitle"><span>( ${esc(datedTitle(recordTitle(r), r.record_date))} )</span></div>
     <div class="lt-body tight">${tightText(r.body)}</div>
@@ -1740,7 +1793,7 @@ function viewRecordPrint(c, r) {
   const p = byId('parties', r.party_id) || DB.parties.find(x => x.case_id === c.id && x.party_role === 'مدعي');
   const who = (r.party_id && p ? p.name : (r.place || '').trim() || (p ? p.name : '')) || 'قضية ' + (c.case_number || c.id);
   const pv = printShell(html, ['#/case/' + c.id + '/record/' + r.id, 'تعديل المحضر'], PAGE_RULE, '', `${recordTitle(r)} - ${who}`);
-  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 16, 12, true)); pv.scaler(); });
+  pv.ready.then(() => { $('#pvInfo').textContent = pagesInfo(fitPage($('#sheet'), 18, 12, true, 16)); pv.scaler(); });
 }
 
 // ---- صيغ النتيجة والمرئيات ----
@@ -1849,10 +1902,10 @@ function viewReportForm(c) {
         <div class="field"><label>المشفوعات</label><input type="text" name="attachments_note" value="${esc(r.attachments_note)}"></div>
         <div class="field"><label>الموضوع</label><input type="text" name="subject_line" value="${esc(r.subject_line)}"></div>
       </div></div>
-    <div class="card"><h2>الإشارة <button type="button" class="btn sm ghost count" id="regenRef">إعادة التوليد</button></h2>
+    <div class="card"><h2>الموضوع <button type="button" class="btn sm ghost count" id="regenRef">إعادة التوليد</button></h2>
       <textarea name="ref_text" class="amiri" style="min-height:130px">${esc(r.ref_text)}</textarea>
       <div class="hint">تُولَّد تلقائيًا من بيانات القضية والأطراف — يمكنك تعديلها بحرية</div></div>
-    <div class="card"><h2>الإجراءات <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
+    <div class="card"><h2>الإجراءات المتخذة <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
       <textarea name="procedures_text" class="amiri" style="min-height:130px">${esc(r.procedures_text)}</textarea>
       <div class="hint">تُدرج محاضر سماع الأقوال ومحاضر الإجراءات مرقّمة — أضف أو عدّل ما تحتاجه</div>
       <div class="procord"><div class="xproc-h">ترتيب الإجراءات — حرّك أي إجراء بالأسهم</div><div id="procOrd"></div></div>
@@ -1862,11 +1915,11 @@ function viewReportForm(c) {
         <div class="xproc-add"><input type="text" id="xprocNew" placeholder="اكتب إجراءً آخر، مثال: جرى الاطلاع على سجل الموقوفين.">
           <button type="button" class="btn sm" id="xprocAdd">إضافة</button></div>
         <div class="hint">الإجراء الذي تكتبه يُحفظ في القائمة ليظهر في كل القضايا. اضغط ✕ لحذفه من القائمة.</div></div></div>
-    <div class="card"><h2>صيغة جاهزة للنتيجة والمرئيات</h2>
+    <div class="card"><h2>صيغة جاهزة للتقييم والمرئيات</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">${(S().report_templates || []).map((t, i) =>
         `<button type="button" class="btn ghost" data-tpl="${i}">${esc(t.name)}</button>`).join('') || '<span class="muted">لا توجد صيغ — أضفها من الإعدادات</span>'}</div>
       <div class="hint">تملأ «النتيجة» و«المرئيات» بأسماء أطراف هذه القضية، ثم تعدّلها كما تشاء. الصيغ تُعدَّل من «الإعدادات».</div></div>
-    <div class="card"><h2>النتيجة</h2>
+    <div class="card"><h2>التقييم</h2>
       <textarea name="result_text" class="amiri" placeholder="بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، لم يثبت وجود أي إساءة استخدام للسلطة من قبل رجل الأمن المذكور.">${esc(r.result_text)}</textarea></div>
     <div class="card"><h2>المرئيات</h2>
       <textarea name="opinion_text" class="amiri" style="min-height:90px" placeholder="حفظ الشكوى لعدم ثبوت ما يستوجب الاستمرار فيها.">${esc(r.opinion_text)}</textarea></div>
@@ -2074,7 +2127,7 @@ async function importBackup(file) {
       ${full ? `<button class="btn danger" id="imReplace">استبدال كل بياناتي بهذه النسخة (تُحذف ${DB.cases.length} قضية حالية)</button>` : ''}
       <button class="btn ghost" id="imX">إلغاء</button></div>`);
   $('#imX', m).onclick = () => m.remove();
-  const putAll = async () => { for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u)); urlCache.clear(); };
+  const putAll = async () => { for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u)); urlCache.clear(); await loadDocFonts(); };
   $('#imMerge', m).onclick = async () => {
     m.remove(); toast('جارٍ الاستيراد...');
     await putAll();
@@ -2097,7 +2150,7 @@ async function moveTo(target) {
   const existing = await target.load().catch(() => null);
   if (existing && existing.cases && existing.cases.length) {
     if (confirm(`المجلد المختار يحتوي على قاعدة بيانات (${existing.cases.length} قضية).\nموافق = فتح بيانات ذلك المجلد\nإلغاء = تراجع دون تغيير`)) {
-      await Store.useBackend(target); urlCache.clear(); DB = shapeDB(existing); toast('تم فتح بيانات المجلد'); route();
+      await Store.useBackend(target); urlCache.clear(); DB = shapeDB(existing); await loadDocFonts(); toast('تم فتح بيانات المجلد'); route();
     }
     return;
   }
@@ -2137,6 +2190,8 @@ function viewSettings() {
       </div>
       <div class="hint">النسخة ملف واحد يُحفظ في «التنزيلات» على جهازك، ويضم القضايا بأطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها. «النسخة الكاملة» تضم الإعدادات أيضًا. عند الاستيراد تختار: إضافة القضايا إلى بياناتك (والقضية الموجودة تُحدَّث)، أو استبدال كل البيانات. ولحفظ قضية واحدة: افتح ملفها واضغط «حفظ نسخة من هذه القضية».</div>
     </div>
+
+    ${fontsCardHTML()}
 
     <div class="card"><h2>طريقة عرض ملف القضية</h2>
       <div class="sigmodes">
@@ -2219,6 +2274,7 @@ function viewSettings() {
         : '<div class="empty">لا توجد حركات مسجلة</div>'}</div></div>
     <div class="hint" style="text-align:center; margin-bottom:24px">إصدار الواجهة: ${APP_VERSION}</div>`, 'settings');
 
+  bindFontsCard();
   const f = $('#f');
   f.onsubmit = async e => {
     e.preventDefault();

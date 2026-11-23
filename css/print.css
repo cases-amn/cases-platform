@@ -8,12 +8,19 @@ body.printview { background: #e9ecea; }
 
 .sheet {
   width: 210mm; background: #fff; color: #000; box-shadow: 0 2px 14px rgba(0,0,0,.25);
-  font-family: 'Amiri', 'Traditional Arabic', serif; direction: rtl; font-size: var(--fs, 15pt); font-weight: 400;
+  font-family: var(--f-body); direction: rtl; font-size: var(--fs, 15pt); font-weight: 400;
   /* حبر أسود أغمق وأعرض قليلًا من خط Amiri العادي */
   -webkit-text-stroke: .35px #000; -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
 .sheet.one { height: 296mm; padding: 8mm; overflow: hidden; }
 .sheet.flow { min-height: 297mm; padding: 8mm; }
+
+/* خطوط التقرير الرسمي: النص Times New Roman، والترويسة والتوقيعات MunaBlack، والرقم والتاريخ Arabic Typesetting
+   (تُرفع من الإعدادات — js/fonts.js) */
+.sheet .basmala, .sheet .head .org, .sheet .sigs, .sheet .sigrow, .sheet .lt-sig { font-family: var(--f-acc); -webkit-text-stroke: 0; }
+.sheet .head .meta { font-family: var(--f-meta); }
+/* الخط المرفوع أغمق من Amiri فلا يحتاج تعريضًا */
+html.userfonts .sheet { -webkit-text-stroke: 0; }
 
 /* الترويسة */
 .basmala { text-align: center; font-size: .82em; margin-bottom: .1em; }
@@ -93,3 +100,28 @@ table.pdata tr:hover td { background: none; }
 .lt-body.tight { line-height: 1.55; }
 .lt-sig.rec-sig { margin-top: .6em; line-height: 1.35; break-inside: avoid; }
 .lt-sig.rec-sig .rn { padding-top: 1.35em; }
+
+/* ---------- تقرير تقييم الإجراءات بنفس شكل التقرير الرسمي ---------- */
+/* الترويسة بالكحلي كما في القالب الرسمي (لكل المستندات) */
+.sheet .basmala, .sheet .head .org, .sheet .head .meta { color: #002060; }
+.sheet .head .meta .dots { border-bottom-color: #002060; }
+/* ---- أسلوب المستندات الرسمية (offdoc): التقرير والمحاضر والخطابات ---- */
+/* العنوان عريض في الوسط بلا خط تحته */
+.offdoc .ptitle span { border-bottom: 0; padding: 0; }
+.offdoc .ptitle { margin: .5em 0 .4em; }
+/* أسطر متقاربة كالقالب الرسمي (مسافة مفردة) */
+.offdoc .intro, .offdoc .qa, .offdoc .lt-body, .offdoc .lt-body.tight { line-height: 1.45; }
+.offdoc .qa .qm { font-weight: 700; }
+.offdoc .lt-to { margin: .9em 0 .5em; }
+/* أسماء الأدوار في التوقيعات بلا خط تحتها */
+.offdoc .sigbox .role { text-decoration: none; }
+/* «الموضوع:-» عريض في أول الفقرة */
+.rep .sec .hi { font-weight: 700; }
+.rep .sec .h { line-height: 1.45; }
+.rep .sec .b { line-height: 1.45; }
+.rep .sec { margin-bottom: .15em; }
+/* الإجراءات: رقم ثم نص، والسطر الثاني يبدأ تحت النص لا تحت الرقم */
+.rep .plist .pi { display: flex; align-items: baseline; line-height: 1.45; text-align: justify; }
+.rep .plist .pn { flex: none; width: 1.9em; padding-inline-start: .55em; }
+.rep .plist .pt { flex: 1; white-space: pre-wrap; }
+.rep .sigs { margin-top: 1.4em; }

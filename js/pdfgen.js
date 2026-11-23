@@ -1,6 +1,7 @@
 /* ملف PDF بنص حقيقي (لا صورة) من الورقة المعروضة.
  * سفاري الآيفون يضيف رابط الموقع عند طباعة أي صفحة ويب، فنبني ملف PDF بأنفسنا:
- * مواضع الكلمات والأسطر والجداول تؤخذ من تخطيط المتصفح نفسه، والحروف تُكتب بخط Amiri مضمَّنًا في الملف
+ * مواضع الكلمات والأسطر والجداول تؤخذ من تخطيط المتصفح نفسه، والحروف تُكتب بالخط نفسه المعروض
+ * (خطوط المستندات في js/fonts.js: المرفوعة من الإعدادات أو البديلة) مضمَّنًا في الملف
  * بأشكالها الموصولة (أول/وسط/آخر الكلمة)، فيبقى النص حادًّا عند التكبير والطباعة. */
 (function () {
   'use strict';
@@ -9,12 +10,12 @@
   const PAGE_W = 595.28, PAGE_H = 841.89, MARGIN_MM = 8;
 
   // ---------------- قراءة خط TrueType ----------------
-  const fontCache = {};
-  async function loadFont(bold) {
-    const k = bold ? 'b' : 'r';
-    if (!fontCache[k]) fontCache[k] = fetch(bold ? 'fonts/Amiri-Bold.ttf' : 'fonts/Amiri-Regular.ttf')
-      .then(r => { if (!r.ok) throw new Error('تعذّر تحميل الخط'); return r.arrayBuffer(); }).then(parseTTF);
-    return fontCache[k];
+  const parsed = new WeakMap();   // ملف الخط → الخط مقروءًا
+  /** الخط المستخدم لعائلة ووزن: { font, fake } — fake: عريض مُصطنع من الخط العادي */
+  async function loadFont(fam, bold) {
+    const { buf, fake } = await window.DOC_FONTS.get(fam, bold);
+    if (!parsed.has(buf)) parsed.set(buf, parseTTF(buf));
+    return { font: parsed.get(buf), fake };
   }
   function parseTTF(buf) {
     const dv = new DataView(buf), u16 = o => dv.getUint16(o), i16 = o => dv.getInt16(o), u32 = o => dv.getUint32(o);
@@ -59,7 +60,85 @@
       const o = T.glyf + lo;
       return [i16(o + 2), i16(o + 4), i16(o + 6), i16(o + 8)];
     };
-    return { buf, upm, bbox, asc, desc, adv, cmap, gbox, used: new Set() };
+    let gsub = null;
+    try { if (T.GSUB) gsub = parseGSUB(dv, T.GSUB); } catch (e) { gsub = null; }
+    return { buf, upm, bbox, asc, desc, adv, cmap, gbox, gsub, used: new Set() };
+  }
+
+  // ---------------- أشكال الحروف من جدول GSUB ----------------
+  // بعض الخطوط (مثل خطوط ويندوز الحديثة) لا تضع أشكال الحروف الموصولة في جدول الرموز،
+  // بل في GSUB: الخصائص isol/init/medi/fina للأشكال، وrlig/liga للام ألف.
+  function parseGSUB(dv, base) {
+    const u16 = o => dv.getUint16(o), i16 = o => dv.getInt16(o), u32 = o => dv.getUint32(o);
+    const coverage = o => {
+      const out = [], fmt = u16(o);
+      if (fmt === 1) for (let i = 0, n = u16(o + 2); i < n; i++) out.push(u16(o + 4 + i * 2));
+      else if (fmt === 2) for (let i = 0, n = u16(o + 2); i < n; i++) {
+        const r = o + 4 + i * 6, s = u16(r), e = u16(r + 2), ci = u16(r + 4);
+        for (let g = s; g <= e; g++) out[ci + g - s] = g;
+      }
+      return out;
+    };
+    const featList = base + u16(base + 6), lookList = base + u16(base + 8);
+    const lookupsOf = tags => {
+      const idx = new Set();
+      for (let i = 0, n = u16(featList); i < n; i++) {
+        const r = featList + 2 + i * 6;
+        const tag = String.fromCharCode(dv.getUint8(r), dv.getUint8(r + 1), dv.getUint8(r + 2), dv.getUint8(r + 3));
+        if (!tags.includes(tag)) continue;
+        const f = featList + u16(r + 4);
+        for (let j = 0, m = u16(f + 2); j < m; j++) idx.add(u16(f + 4 + j * 2));
+      }
+      return [...idx].sort((a, b) => a - b);
+    };
+    /** جداول فرعية لبحث: [{type, off}] بعد فك نوع الامتداد (7) */
+    const subtables = li => {
+      const L = lookList + u16(lookList + 2 + li * 2), type = u16(L), out = [];
+      for (let i = 0, n = u16(L + 4); i < n; i++) {
+        const st = L + u16(L + 6 + i * 2);
+        if (type === 7) out.push({ type: u16(st + 2), off: st + u32(st + 4) });
+        else out.push({ type, off: st });
+      }
+      return out;
+    };
+    const singleMap = tags => {
+      const maps = [];
+      for (const li of lookupsOf(tags)) {
+        const m = new Map();
+        for (const { type, off } of subtables(li)) {
+          if (type !== 1) continue;
+          const fmt = u16(off), cov = coverage(off + u16(off + 2));
+          if (fmt === 1) { const d = i16(off + 4); cov.forEach(g => { if (!m.has(g)) m.set(g, (g + d) & 0xFFFF); }); }
+          else if (fmt === 2) cov.forEach((g, i) => { if (g != null && !m.has(g)) m.set(g, u16(off + 6 + i * 2)); });
+        }
+        for (const { type, off } of subtables(li)) {   // استبدال متعدد بشكل واحد (مثل خط Amiri)
+          if (type !== 2 || u16(off) !== 1) continue;
+          coverage(off + u16(off + 2)).forEach((g, i) => {
+            const sq = off + u16(off + 6 + i * 2);
+            if (g != null && !m.has(g) && u16(sq) === 1) m.set(g, u16(sq + 2));
+          });
+        }
+        if (m.size) maps.push(m);
+      }
+      return g => { for (const m of maps) if (m.has(g)) g = m.get(g); return g; };
+    };
+    const forms = { isol: singleMap(['isol']), init: singleMap(['init']), medi: singleMap(['medi']), fina: singleMap(['fina']) };
+    const ligs = new Map();   // أول رمز → [{rest: [...], g}]
+    for (const li of lookupsOf(['rlig', 'liga', 'ccmp'])) for (const { type, off } of subtables(li)) {
+      if (type !== 4 || u16(off) !== 1) continue;
+      const cov = coverage(off + u16(off + 2));
+      for (let i = 0, n = u16(off + 4); i < n; i++) {
+        const set = off + u16(off + 6 + i * 2);
+        for (let j = 0, m = u16(set); j < m; j++) {
+          const lg = set + u16(set + 2 + j * 2), cc = u16(lg + 2), rest = [];
+          for (let c = 1; c < cc; c++) rest.push(u16(lg + 4 + (c - 1) * 2));
+          if (!ligs.has(cov[i])) ligs.set(cov[i], []);
+          ligs.get(cov[i]).push({ rest, g: u16(lg) });
+        }
+      }
+    }
+    const lig = (a, b) => { const l = (ligs.get(a) || []).find(x => x.rest.length === 1 && x.rest[0] === b); return l ? l.g : 0; };
+    return { form: (f, g) => forms[f] ? forms[f](g) : g, lig };
   }
 
   // ---------------- وصل الحروف العربية ----------------
@@ -100,15 +179,15 @@
       if (c === 0x644 && i + 1 < cl.length && LAM_ALEF[cl[i + 1].o]) {
         cl[i].c = LAM_ALEF[cl[i + 1].o] + (prevJ ? 1 : 0);
         cl[i].marks = cl[i].marks.concat(cl[i + 1].marks);
-        cl[i].lig = true;
+        cl[i].lig = true; cl[i].alef = cl[i + 1].o; cl[i].form = prevJ ? 'medi' : 'init';
         cl.splice(i + 1, 1);
         continue;
       }
       const nextJ = i + 1 < cl.length && joins(cl[i + 1].o);
       const f = F[c];
-      if (f.length === 4) cl[i].c = prevJ && nextJ ? f[3] : prevJ ? f[1] : nextJ ? f[2] : f[0];
-      else if (f.length === 2) cl[i].c = prevJ ? f[1] : f[0];
-      else cl[i].c = f[0];
+      const form = f.length === 4 ? (prevJ && nextJ ? 'medi' : prevJ ? 'fina' : nextJ ? 'init' : 'isol') : f.length === 2 && prevJ ? 'fina' : 'isol';
+      cl[i].form = form;
+      cl[i].c = f[{ isol: 0, fina: 1, init: 2, medi: 3 }[form]];
     }
     // ترتيب العرض: مقاطع يمين-لليسار تُعكس، والأرقام والحروف اللاتينية تبقى كما هي
     const dir = cl.map(x => isLTR(x.o) ? 'L' : isRTL(x.o) ? 'R' : 'N');
@@ -137,6 +216,25 @@
     return out;
   }
 
+  /** رموز عنقود في خط معيّن (من اليسار لليمين): الشكل الموصول من جدول الرموز، أو من GSUB إن لم يوجد فيه */
+  function clusterGlyphs(font, x) {
+    const direct = font.cmap.get(x.c);
+    if (direct) return [direct];
+    const base = cp => font.cmap.get(cp) || 0;
+    if (x.lig) {
+      const lam = base(0x644), alef = base(x.alef);
+      if (font.gsub && lam && alef) {
+        const l1 = font.gsub.form(x.form, lam), a1 = font.gsub.form('fina', alef);
+        const g = font.gsub.lig(l1, a1) || font.gsub.lig(lam, alef);
+        if (g) return [g];
+        return [a1, l1];
+      }
+      return [alef, lam];
+    }
+    const g = base(x.o);
+    return [g && x.form && font.gsub ? font.gsub.form(x.form, g) : g];
+  }
+
   // ---------------- جمع عناصر الورقة من تخطيط المتصفح ----------------
   /** لون أبيض أو شفاف (لا يُرسم) */
   const isWhite = c => {
@@ -148,11 +246,11 @@
   const rgb = c => { const m = c.match(/[\d.]+/g) || ['0', '0', '0']; return m.slice(0, 3).map(v => (+v / 255).toFixed(3)).join(' '); };
   const baseCache = new Map();
   /** نسبة خط القاعدة داخل صندوق النص (تُقاس فعليًا في المتصفح لكل حجم ووزن) */
-  function baselineRatio(fs, weight) {
-    const k = fs + '|' + weight;
+  function baselineRatio(fs, weight, fam) {
+    const k = fs + '|' + weight + '|' + fam;
     if (baseCache.has(k)) return baseCache.get(k);
     const s = document.createElement('span');
-    s.style.cssText = `position:absolute;left:-9999px;top:0;font-family:Amiri,serif;font-size:${fs}px;font-weight:${weight};line-height:normal;white-space:nowrap`;
+    s.style.cssText = `position:absolute;left:-9999px;top:0;font-family:'${fam}',serif;font-size:${fs}px;font-weight:${weight};line-height:normal;white-space:nowrap`;
     s.textContent = 'بـ';
     const i = document.createElement('i');
     i.style.cssText = 'display:inline-block;width:1px;height:0;vertical-align:baseline';
@@ -196,7 +294,8 @@
         if (/underline/.test(getComputedStyle(a).textDecorationLine)) { deco = a; break; }
       }
       const stroke = parseFloat(cs.webkitTextStrokeWidth || '0') || 0;
-      const ratio = baselineRatio(fs, weight >= 600 ? 700 : 400);
+      const fam = (cs.fontFamily.split(',')[0] || '').trim().replace(/^["']|["']$/g, '');
+      const ratio = baselineRatio(fs, weight >= 600 ? 700 : 400, fam);
       const re = /\S+/g;
       let m;
       while ((m = re.exec(n.data))) {
@@ -212,7 +311,7 @@
         const top = Math.min(...rects.map(r => r.top)), bottom = Math.max(...rects.map(r => r.bottom));
         const left = Math.min(...rects.map(r => r.left)), right = Math.max(...rects.map(r => r.right));
         words.push({ t: m[0], x: left - ox, y: top - oy, w: right - left, h: bottom - top, base: top - oy + ratio * (bottom - top),
-                     fs, bold: weight >= 600, color: rgb(cs.color), stroke, deco });
+                     fs, fam, bold: weight >= 600, color: rgb(cs.color), stroke, deco });
       }
     }
     // الارتفاع الفعلي: قد يتجاوز المحتوى صندوق الورقة الداخلي قليلًا (مثل سطر التوقيع الأخير)
@@ -269,7 +368,17 @@
   async function make(root) {
     if (document.fonts && document.fonts.ready) await document.fonts.ready;
     const doc = collect(root);
-    const fonts = { r: await loadFont(false), b: doc.words.some(w => w.bold) ? await loadFont(true) : null };
+    // خط كل كلمة حسب عائلتها ووزنها المعروضين؛ والخط الواحد يُضمَّن مرة واحدة
+    const fontList = [], styleFont = new Map();
+    for (const w of doc.words) {
+      const sk = w.fam + '|' + (w.bold ? 1 : 0);
+      if (!styleFont.has(sk)) {
+        const { font, fake } = await loadFont(w.fam, w.bold);
+        if (!fontList.includes(font)) fontList.push(font);
+        styleFont.set(sk, { font, fake, name: '/F' + (fontList.indexOf(font) + 1) });
+      }
+      w.st = styleFont.get(sk);
+    }
     const pages = paginate(doc);
     const scale = Math.min(1, (210 - 2 * MARGIN_MM) * MM / doc.width);   // الورقة أعرض من الصفحة؟ تُصغَّر لتتسع
     const mL = MARGIN_MM * MM * PX, mT = MARGIN_MM * MM * PX;
@@ -313,15 +422,20 @@
       out.push('BT');
       for (const w of doc.words) {
         if (w.base < p0 || w.base >= p1) continue;   // كل سطر في صفحة واحدة حسب خط قاعدته
-        const font = w.bold && fonts.b ? fonts.b : fonts.r, fname = font === fonts.b ? '/F2' : '/F1';
+        const { font, fake, name: fname } = w.st;
         const k = w.fs / font.upm;
-        const cl = shapeWord(w.t).map(x => ({ g: font.cmap.get(x.c) || font.cmap.get(x.o) || 0, marks: x.marks.map(m => font.cmap.get(m) || 0).filter(Boolean) }));
+        const cl = [];
+        for (const x of shapeWord(w.t)) {
+          const gs = clusterGlyphs(font, x), marks = x.marks.map(m => font.cmap.get(m) || 0).filter(Boolean);
+          gs.forEach((g, i) => cl.push({ g, marks: i === gs.length - 1 ? marks : [] }));
+        }
         const total = cl.reduce((s, x) => s + font.adv[x.g], 0) * k;
         if (!total) continue;
         const sx = Math.max(0.7, Math.min(1.3, w.w / total));
         const fsPt = w.fs * scale * PX;
         out.push(`${w.color} rg ${w.color} RG`);
-        out.push(w.stroke > 0 ? `2 Tr ${num(w.stroke * scale * PX)} w` : '0 Tr');
+        const stroke = fake ? Math.max(w.stroke, w.fs * 0.03) : w.stroke;   // العريض المُصطنع: حدّ حول الحروف
+        out.push(stroke > 0 ? `2 Tr ${num(stroke * scale * PX)} w` : '0 Tr');
         out.push(`${fname} ${num(fsPt)} Tf`);
         let x = w.x;
         const by = Y(w.base, p0);
@@ -352,15 +466,15 @@
     };
     const catalog = add(null), pagesObj = add(null);
     const fontRefs = {};
-    for (const [key, font] of [['F1', fonts.r], ['F2', fonts.b]]) {
-      if (!font || !font.used.size) continue;
+    for (const [key, font] of fontList.map((f, i) => ['F' + (i + 1), f])) {
+      if (!font.used.size) continue;
       const ff = add(await stream(`/Length1 ${font.buf.byteLength}`, new Uint8Array(font.buf), true));
       const k = 1000 / font.upm, fb = font.bbox.map(v => Math.round(v * k));
-      const fd = add([str(`<< /Type /FontDescriptor /FontName /Amiri${key} /Flags 4 /FontBBox [${fb.join(' ')}] /ItalicAngle 0 /Ascent ${Math.round(font.asc * k)} /Descent ${Math.round(font.desc * k)} /CapHeight ${Math.round(font.asc * k)} /StemV 80 /FontFile2 ${ff} 0 R >>`)]);
+      const fd = add([str(`<< /Type /FontDescriptor /FontName /Doc${key} /Flags 4 /FontBBox [${fb.join(' ')}] /ItalicAngle 0 /Ascent ${Math.round(font.asc * k)} /Descent ${Math.round(font.desc * k)} /CapHeight ${Math.round(font.asc * k)} /StemV 80 /FontFile2 ${ff} 0 R >>`)]);
       const gids = [...font.used].sort((a, b) => a - b);
       const W = gids.map(g => `${g} [${Math.round(font.adv[g] * k)}]`).join(' ');
-      const cid = add([str(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Amiri${key} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${fd} 0 R /CIDToGIDMap /Identity /DW 500 /W [${W}] >>`)]);
-      fontRefs[key] = add([str(`<< /Type /Font /Subtype /Type0 /BaseFont /Amiri${key} /Encoding /Identity-H /DescendantFonts [${cid} 0 R] >>`)]);
+      const cid = add([str(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Doc${key} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${fd} 0 R /CIDToGIDMap /Identity /DW 500 /W [${W}] >>`)]);
+      fontRefs[key] = add([str(`<< /Type /Font /Subtype /Type0 /BaseFont /Doc${key} /Encoding /Identity-H /DescendantFonts [${cid} 0 R] >>`)]);
     }
     const imgRefs = [];
     for (let i = 0; i < imgs.length; i++) if (imgs[i])
@@ -385,7 +499,7 @@
     offs.forEach(o => { x += String(o).padStart(10, '0') + ' 00000 n \n'; });
     x += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${len}\n%%EOF`;
     parts.push(str(x));
-    fonts.r.used.clear(); if (fonts.b) fonts.b.used.clear();
+    fontList.forEach(f => f.used.clear());
     return { blob: new Blob(parts, { type: 'application/pdf' }), pages: pages.length };
   }
 
