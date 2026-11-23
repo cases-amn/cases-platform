@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 27;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 28;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -152,6 +152,49 @@ async function hydrateImages(root = document) {
   }));
 }
 function safeName(n) { return (n || 'file').replace(/[\\/:*?"<>|\s]+/g, '_').slice(-80); }
+
+// ---- خطوط المستندات والواجهة (js/fonts.js) ----
+async function loadDocFonts() {
+  try { await DOC_FONTS.load(p => Store.backend.getFile(p)); } catch (e) { console.warn('fonts', e); }
+}
+function fontsCardHTML() {
+  const names = S().doc_fonts || {};
+  return `<div class="card" id="fontsCard"><h2>خطوط التقارير والواجهة</h2>
+    <div class="hint" style="margin-bottom:10px">خطوط التقرير الرسمي تجارية فلا تأتي مع المنصة. ارفعها مرة واحدة من جهازك فتُستخدم في الواجهة وفي كل التقارير والمحاضر والخطابات وملفات PDF.
+      تُحفظ مع بياناتك ولا تُرفع للإنترنت. وإلى أن ترفعها يُستخدم خط مجاني قريب منها.</div>
+    ${DOC_FONTS.SLOTS.map(sl => {
+      const user = DOC_FONTS.state[sl.k] && DOC_FONTS.state[sl.k].user;
+      return `<div class="fontrow">
+        <div class="fr-info"><b>${esc(sl.label)}</b> <span class="muted">— ${esc(sl.ref)} (الملف ${esc(sl.file)})</span><br>
+          <span class="${user ? 'ok' : 'muted'}">${user ? '✔ مرفوع: ' + esc(names[sl.k] || sl.file) : 'غير مرفوع — يُستخدم البديل ' + esc(sl.fbName)}</span>
+          <div class="fr-sample" style="font-family:'${sl.fam}'; font-weight:${sl.weight}">بسم الله الرحمن الرحيم — تقييم إجراءات قضية ١٤٤٨هـ</div></div>
+        <div class="fr-acts"><label class="btn sm ghost" style="margin:0">${user ? 'استبدال' : 'رفع الخط'}<input type="file" data-font="${sl.k}" accept=".ttf,font/ttf,application/x-font-ttf,application/octet-stream" hidden></label>
+          ${user ? `<button type="button" class="btn sm danger" data-fontdel="${sl.k}">إزالة</button>` : ''}</div></div>`;
+    }).join('')}
+    <div class="hint">في ويندوز الخطوط في المجلد C:\\Windows\\Fonts — انسخ الملفات منه إلى سطح المكتب أولًا (times.ttf وtimesbd.ttf وarabtype.ttf، وملف MunaBlack من حيث ثبّتّه) ثم اخترها هنا. على الجوال: انقلها إليه، أو استورد نسخة احتياطية كاملة من الكمبيوتر فتنتقل الخطوط معها.</div></div>`;
+}
+function bindFontsCard() {
+  $$('[data-font]').forEach(inp => inp.onchange = async () => {
+    const file = inp.files[0], k = inp.dataset.font;
+    if (!file) return;
+    const buf = await file.arrayBuffer(), err = DOC_FONTS.validate(buf);
+    if (err) { toast(err, 'error'); inp.value = ''; return; }
+    try { await new FontFace('ChkFont', buf).load(); }
+    catch (e) { toast('المتصفح لم يقبل ملف الخط', 'error'); inp.value = ''; return; }
+    await putFile(DOC_FONTS.path(k), new Blob([buf], { type: 'font/ttf' }));
+    S().doc_fonts = Object.assign({}, S().doc_fonts, { [k]: file.name });
+    log('رفع خط', file.name); await save();
+    await loadDocFonts(); toast('تم رفع الخط واعتماده'); route();
+  });
+  $$('[data-fontdel]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.fontdel;
+    if (!confirm('إزالة هذا الخط والعودة للخط البديل؟')) return;
+    await delFile(DOC_FONTS.path(k));
+    const n = Object.assign({}, S().doc_fonts); n[k] = undefined; S().doc_fonts = JSON.parse(JSON.stringify(n));
+    log('إزالة خط'); await save();
+    await loadDocFonts(); route();
+  });
+}
 
 // ========================= البداية =========================
 const app = () => $('#app');
@@ -227,6 +270,7 @@ async function openData() {
     return;
   }
   if (!DB.cases.length && !DB.log.length) { log('إنشاء قاعدة البيانات', Store.backend.label); await save(); }
+  await loadDocFonts();
   if (S().lock_hash && sessionStorage.getItem('unlocked') !== S().lock_hash) return screenLock();
   startRouter();
 }
@@ -1203,7 +1247,7 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
 
 // ---- ملف PDF تبنيه المنصة بنفسها ----
 // طباعة صفحة الويب في سفاري الآيفون تضيف دائمًا رابط الموقع والتاريخ، ولا يمكن منعها من الصفحة.
-// لذلك تبني المنصة ملف PDF بنص حقيقي وخط Amiri مضمَّن (js/pdfgen.js)، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
+// لذلك تبني المنصة ملف PDF بنص حقيقي وبالخطوط المعروضة نفسها مضمَّنة (js/pdfgen.js)، فيُحفظ أو يُطبع الملف نفسه بلا رابط.
 let pdfLoad = null;
 const loadPdfGen = () => pdfLoad || (pdfLoad = new Promise((res, rej) => {
   const s = document.createElement('script'); s.src = 'js/pdfgen.js?v=' + APP_VERSION;
@@ -2074,7 +2118,7 @@ async function importBackup(file) {
       ${full ? `<button class="btn danger" id="imReplace">استبدال كل بياناتي بهذه النسخة (تُحذف ${DB.cases.length} قضية حالية)</button>` : ''}
       <button class="btn ghost" id="imX">إلغاء</button></div>`);
   $('#imX', m).onclick = () => m.remove();
-  const putAll = async () => { for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u)); urlCache.clear(); };
+  const putAll = async () => { for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u)); urlCache.clear(); await loadDocFonts(); };
   $('#imMerge', m).onclick = async () => {
     m.remove(); toast('جارٍ الاستيراد...');
     await putAll();
@@ -2097,7 +2141,7 @@ async function moveTo(target) {
   const existing = await target.load().catch(() => null);
   if (existing && existing.cases && existing.cases.length) {
     if (confirm(`المجلد المختار يحتوي على قاعدة بيانات (${existing.cases.length} قضية).\nموافق = فتح بيانات ذلك المجلد\nإلغاء = تراجع دون تغيير`)) {
-      await Store.useBackend(target); urlCache.clear(); DB = shapeDB(existing); toast('تم فتح بيانات المجلد'); route();
+      await Store.useBackend(target); urlCache.clear(); DB = shapeDB(existing); await loadDocFonts(); toast('تم فتح بيانات المجلد'); route();
     }
     return;
   }
@@ -2137,6 +2181,8 @@ function viewSettings() {
       </div>
       <div class="hint">النسخة ملف واحد يُحفظ في «التنزيلات» على جهازك، ويضم القضايا بأطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها. «النسخة الكاملة» تضم الإعدادات أيضًا. عند الاستيراد تختار: إضافة القضايا إلى بياناتك (والقضية الموجودة تُحدَّث)، أو استبدال كل البيانات. ولحفظ قضية واحدة: افتح ملفها واضغط «حفظ نسخة من هذه القضية».</div>
     </div>
+
+    ${fontsCardHTML()}
 
     <div class="card"><h2>طريقة عرض ملف القضية</h2>
       <div class="sigmodes">
@@ -2219,6 +2265,7 @@ function viewSettings() {
         : '<div class="empty">لا توجد حركات مسجلة</div>'}</div></div>
     <div class="hint" style="text-align:center; margin-bottom:24px">إصدار الواجهة: ${APP_VERSION}</div>`, 'settings');
 
+  bindFontsCard();
   const f = $('#f');
   f.onsubmit = async e => {
     e.preventDefault();
