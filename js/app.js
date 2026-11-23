@@ -87,7 +87,7 @@ const DEFAULT_SETTINGS = {
     TPL_WAIVE,
   ],
 };
-const APP_VERSION = 31;   // يُرفع مع CACHE في sw.js عند كل نشر
+const APP_VERSION = 32;   // يُرفع مع CACHE في sw.js عند كل نشر
 const TABLES = ['cases', 'parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 const CASE_CHILDREN = ['parties', 'statements', 'attachments', 'reports', 'letters', 'requests', 'records'];
 let DB = null;
@@ -230,10 +230,10 @@ function bareScreen(inner) {
 
 function screenChoose() {
   bareScreen(`
-    <h1>منصة قضايا إساءة استخدام السلطة</h1>
+    <h1>الحالات</h1>
     <div class="sub">اختر مكان حفظ قاعدة البيانات على هذا الجهاز.<br>لا تُرفع أي بيانات إلى الإنترنت.</div>
     ${Store.folderSupported ? `<button class="choice" id="cFolder"><b>📁 مجلد أختاره على الجهاز</b>
-      <span>تُحفظ القضايا والتواقيع والمرفقات في مجلد تختاره (على القرص أو الفلاشة). مناسب للكمبيوتر.</span></button>` : ''}
+      <span>تُحفظ الحالات والتواقيع والمرفقات في مجلد تختاره (على القرص أو الفلاشة). مناسب للكمبيوتر.</span></button>` : ''}
     <button class="choice" id="cBrowser"><b>🌐 داخل المتصفح</b>
       <span>تُحفظ البيانات داخل هذا المتصفح على هذا الجهاز. مناسب للجوال — احرص على أخذ نسخة احتياطية من الإعدادات.</span></button>
     ${!Store.folderSupported ? '<div class="hint" style="margin-top:12px">ميزة اختيار المجلد متاحة في متصفح Chrome أو Edge على الكمبيوتر.</div>' : ''}
@@ -248,7 +248,7 @@ function screenChoose() {
 
 function screenPermission() {
   bareScreen(`
-    <h1>منصة قضايا إساءة استخدام السلطة</h1>
+    <h1>الحالات</h1>
     <div class="sub">قاعدة البيانات محفوظة في المجلد: <b>${esc(Store.pendingFolderName())}</b><br>اسمح للمتصفح بالوصول إليه للمتابعة.</div>
     <button class="btn" id="pGrant">فتح المجلد والمتابعة</button>
     <button class="btn ghost" id="pOther">اختيار مكان آخر</button>
@@ -278,8 +278,7 @@ async function openData() {
 function screenLock() {
   bareScreen(`
     <div class="emblem">${S().logo_file ? `<img data-file="${esc(S().logo_file)}" alt="">` : ''}</div>
-    <h1>منصة قضايا إساءة استخدام السلطة</h1>
-    <div class="sub">${esc(S().org_line4)} — ${esc(S().org_line5)}</div>
+    <h1>الحالات</h1>
     <form id="lockF"><label>رمز الدخول</label>
       <input type="password" name="pin" inputmode="numeric" autocomplete="current-password" autofocus required>
       <button class="btn" type="submit">دخول</button></form>
@@ -446,13 +445,13 @@ function shell(content, active) {
   document.body.className = '';
   const root = !location.hash.replace(/^#\/?/, '').split('?')[0];
   const s = S();
-  const nav = [['#/', 'القضايا', ICON.list, 'list'], ['#/new', 'قضية جديدة', ICON.plus, 'new'],
+  const nav = [['#/', 'الحالات', ICON.list, 'list'], ['#/new', 'حالة جديدة', ICON.plus, 'new'],
                ['#/stats', 'الإحصائيات', ICON.chart, 'stats'], ['#/settings', 'الإعدادات', ICON.gear, 'settings']];
   app().innerHTML = `
     <header class="topbar">
       <div class="brand">
         ${s.logo_file ? `<img data-file="${esc(s.logo_file)}" alt="">` : ''}
-        <div>منصة قضايا إساءة استخدام السلطة<span class="tag">${esc(s.org_line4)} — ${esc(s.org_line5)}</span></div>
+        <div>الحالات</div>
       </div>
       <nav>${nav.map(n => `<a href="${n[0]}" class="${active === n[3] ? 'active' : ''}">${n[1]}</a>`).join('')}</nav>
       ${s.lock_hash ? '<button class="lockbtn" id="lockNow">قفل</button>' : ''}
@@ -496,11 +495,11 @@ function caseStats(c) {
 function viewDashboard() {
   const q0 = lsGet('dash_q', ''), st0 = lsGet('dash_st', '');
   shell(`
-    <div class="page-head"><h1>سجل <span>القضايا</span></h1>
-      <div class="acts"><a class="btn gold" href="#/new">+ قضية جديدة</a></div></div>
+    <div class="page-head"><h1>سجل <span>الحالات</span></h1>
+      <div class="acts"><a class="btn gold" href="#/new">+ حالة جديدة</a></div></div>
     <div class="card"><div class="searchbar">
-      <input type="search" id="q" value="${esc(q0)}" placeholder="بحث: اسم طرف، رقم هوية، رقم القضية، رقم الأمر، الموضوع...">
-      <select id="st"><option value="">كل الحالات</option>${opts(STATUSES, st0)}</select>
+      <input type="search" id="q" value="${esc(q0)}" placeholder="بحث: اسم طرف، رقم هوية، رقم الحالة، رقم الأمر، الموضوع...">
+      <select id="st"><option value="">كل الأوضاع</option>${opts(STATUSES, st0)}</select>
     </div></div>
     <div class="card flush" style="padding:0; overflow:auto" id="list"></div>`, 'list');
   const draw = () => {
@@ -514,10 +513,10 @@ function viewDashboard() {
         DB.parties.some(p => p.case_id === c.id && (has(p.name) || has(p.national_id))));
     }
     $('#list').innerHTML = rows.length ? `<table class="rt">
-      <tr class="hd"><th>م</th><th>رقم القضية</th><th>مصدر الأمر</th><th>رقم الأمر وتاريخه</th><th>الموضوع</th><th>المحقق المكلف</th><th>الأطراف</th><th>المحاضر</th><th>الحالة</th></tr>
+      <tr class="hd"><th>م</th><th>رقم الحالة</th><th>مصدر الأمر</th><th>رقم الأمر وتاريخه</th><th>الموضوع</th><th>المحقق المكلف</th><th>الأطراف</th><th>المحاضر</th><th>الحالة</th></tr>
       ${rows.map((c, i) => { const n = caseStats(c); return `<tr class="clickable" data-go="#/case/${c.id}">
         <td class="nomob">${i + 1}</td>
-        <td data-l="رقم القضية"><b>${esc(c.case_number || '—')}</b></td>
+        <td data-l="رقم الحالة"><b>${esc(c.case_number || '—')}</b></td>
         <td data-l="مصدر الأمر">${esc(c.order_source || '—')}</td>
         <td data-l="رقم الأمر">${esc(c.order_number || '—')}${c.order_date ? `<br><span class="muted">${esc(c.order_date)}هـ</span>` : ''}</td>
         <td data-l="الموضوع" style="max-width:280px">${esc((c.subject || '').slice(0, 70))}${(c.subject || '').length > 70 ? '…' : ''}</td>
@@ -525,7 +524,7 @@ function viewDashboard() {
         <td data-l="الأطراف"><span class="badge n">${n.parties}</span></td>
         <td data-l="المحاضر"><span class="badge n">${n.statements}</span></td>
         <td data-l="الحالة"><span class="badge st-${esc(c.status)}">${esc(c.status)}</span></td></tr>`; }).join('')}
-    </table>` : `<div class="card"><div class="empty"><b>لا توجد قضايا</b>${q || st ? 'جرّب تعديل معايير البحث' : 'ابدأ بإضافة قضية جديدة'}</div></div>`;
+    </table>` : `<div class="card"><div class="empty"><b>لا توجد حالات</b>${q || st ? 'جرّب تعديل معايير البحث' : 'ابدأ بإضافة حالة جديدة'}</div></div>`;
     $$('[data-go]').forEach(r => r.onclick = () => { location.hash = r.dataset.go; });
   };
   $('#q').oninput = draw; $('#st').onchange = draw;
@@ -542,11 +541,11 @@ function viewCaseForm(c) {
   const v = c || { case_number: String(nextCaseNo()), order_source: S().def_order_source, status: 'جارية', assigned_name: S().def_taker_name };
   const names = [...new Set(DB.cases.map(x => x.assigned_name).concat(S().def_taker_name).filter(Boolean))];
   shell(`
-    <div class="page-head"><h1>${c ? 'تعديل بيانات القضية' : 'قضية <span>جديدة</span>'}</h1></div>
+    <div class="page-head"><h1>${c ? 'تعديل بيانات الحالة' : 'حالة <span>جديدة</span>'}</h1></div>
     <form id="f">
-    <div class="card"><h2>البيانات الرئيسية للقضية</h2>
+    <div class="card"><h2>البيانات الرئيسية للحالة</h2>
       <div class="grid g2">
-        <div class="field"><label>رقم القضية (داخلي)</label><input type="text" name="case_number" id="caseNo" inputmode="numeric" value="${esc(v.case_number)}">
+        <div class="field"><label>رقم الحالة (داخلي)</label><input type="text" name="case_number" id="caseNo" inputmode="numeric" value="${esc(v.case_number)}">
           <div class="hint" id="caseNoHint">${c ? 'يمكن تعديله عند الحاجة' : 'رقم تلقائي — يمكن تعديله عند الحاجة'}</div></div>
         <div class="field"><label>الحالة</label><select name="status">${opts(STATUSES, v.status)}</select></div>
       </div>
@@ -557,10 +556,10 @@ function viewCaseForm(c) {
       </div>
       <div class="field" style="margin-top:14px"><label>صيغة الخطاب الواردة في الأمر</label>
         <textarea name="order_text" placeholder="النص الوارد في خطاب اللجنة الفرعية...">${esc(v.order_text)}</textarea></div>
-      <div class="field" style="margin-top:14px"><label>موضوع القضية (ملخص الشكوى)</label>
+      <div class="field" style="margin-top:14px"><label>موضوع الحالة (ملخص الشكوى)</label>
         <textarea name="subject" style="min-height:80px" placeholder="مثال: ادعاء المواطن/... تعرضه للدفع أثناء تواجده...">${esc(v.subject)}</textarea></div>
       <div class="grid g2" style="margin-top:14px">
-        <div class="field"><label>المحقق المكلف بالقضية</label><input type="text" name="assigned_name" list="names" value="${esc(v.assigned_name)}">
+        <div class="field"><label>المحقق المكلف بالحالة</label><input type="text" name="assigned_name" list="names" value="${esc(v.assigned_name)}">
           <datalist id="names">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist></div>
         ${c ? `<div class="field"><label>النتيجة النهائية</label><select name="final_result">
           <option value="" ${!v.final_result ? 'selected' : ''}>— لم تُحدد بعد —</option>${opts(RESULTS, v.final_result)}</select></div>` : ''}
@@ -574,21 +573,21 @@ function viewCaseForm(c) {
   const no = $('#caseNo'), hint = $('#caseNoHint'), hint0 = hint.textContent;
   const checkNo = () => {
     const dup = caseNoTaken(no.value.trim(), c && c.id);
-    hint.textContent = dup ? '⚠ هذا الرقم مستخدم في قضية أخرى' : hint0;
+    hint.textContent = dup ? '⚠ هذا الرقم مستخدم في حالة أخرى' : hint0;
     hint.style.color = dup ? 'var(--red)' : '';
   };
   no.oninput = checkNo; checkNo();
   f.onsubmit = async e => {
     e.preventDefault();
     const o = formObj(f);
-    if (caseNoTaken(o.case_number, c && c.id) && !confirm(`رقم القضية (${o.case_number}) مستخدم في قضية أخرى. الحفظ بنفس الرقم؟`)) return;
+    if (caseNoTaken(o.case_number, c && c.id) && !confirm(`رقم الحالة (${o.case_number}) مستخدم في حالة أخرى. الحفظ بنفس الرقم؟`)) return;
     let rec = c;
     if (!rec) { rec = { id: nextId('cases'), uid: newUid(), created_at: nowStr(), final_result: '' }; DB.cases.push(rec); }
     Object.assign(rec, o, { updated_at: nowStr() });
     DB.seq.case_no = Math.max(DB.seq.case_no || 0, caseNoOf(rec));
     log(c ? 'تعديل قضية' : 'إنشاء قضية', 'قضية رقم ' + (rec.case_number || rec.id));
     await save();
-    toast(c ? 'تم حفظ التعديلات' : 'تم إنشاء القضية');
+    toast(c ? 'تم حفظ التعديلات' : 'تم إنشاء الحالة');
     location.hash = '#/case/' + rec.id;
   };
 }
@@ -606,7 +605,7 @@ function viewCase(c) {
   const pRole = id => (byId('parties', id) || {}).party_role || '';
   shell(`
     <div class="page-head">
-      <h1>ملف القضية <span>رقم ${esc(c.case_number || c.id)}</span>
+      <h1>ملف الحالة <span>رقم ${esc(c.case_number || c.id)}</span>
         <span class="badge st-${esc(c.status)}">${esc(c.status)}</span></h1>
       <div class="acts"><a class="btn" href="#/case/${c.id}/report">تقرير تقييم الإجراءات</a>
         <a class="btn ghost" href="#/case/${c.id}/edit">تعديل البيانات</a>
@@ -625,10 +624,10 @@ function viewCase(c) {
       ${c.order_text ? `<div style="margin-top:14px"><label>صيغة الخطاب في الأمر</label><div style="line-height:1.9; white-space:pre-wrap">${esc(c.order_text)}</div></div>` : ''}
       ${c.subject ? `<div style="margin-top:14px"><label>الموضوع</label><div style="line-height:1.9; white-space:pre-wrap">${esc(c.subject)}</div></div>` : ''}
       ${c.final_result ? `<div style="margin-top:14px"><label>النتيجة النهائية</label><div><b style="color:var(--green-dark)">${esc(c.final_result)}</b></div></div>` : ''}
-      <div style="margin-top:14px"><button class="btn sm ghost" id="caseBackup">حفظ نسخة من هذه القضية (ملف)</button></div>
+      <div style="margin-top:14px"><button class="btn sm ghost" id="caseBackup">حفظ نسخة من هذه الحالة (ملف)</button></div>
     </div>
 
-    <div class="card" id="sParties"><h2>أطراف القضية</h2>
+    <div class="card" id="sParties"><h2>أطراف الحالة</h2>
       ${parties.length ? `<table class="rt">
         <tr class="hd"><th>م</th><th>الصفة</th><th>الاسم</th><th>رقم الهوية</th><th>الجنسية</th><th>الجنس</th><th>الجوال</th><th>المهنة/الرتبة</th><th></th></tr>
         ${parties.map((p, i) => `<tr>
@@ -773,14 +772,14 @@ function viewCase(c) {
     window.scrollTo(0, t.getBoundingClientRect().top + scrollY - 70);   // قفز مباشر: التمرير الناعم لا يعمل في كل المتصفحات
   });
   $('#delCase').onclick = async () => {
-    if (!confirm('حذف القضية وجميع أطرافها ومحاضرها ومرفقاتها نهائيًا؟')) return;
+    if (!confirm('حذف الحالة وجميع أطرافها ومحاضرها ومرفقاتها نهائيًا؟')) return;
     for (const s of sts) await delFile(s.signature_path);
     for (const a of atts) await delFile(a.filename);
     DB.cases = DB.cases.filter(x => x.id !== c.id);
     for (const t of CASE_CHILDREN) DB[t] = DB[t].filter(x => x.case_id !== c.id);
     for (const s of sts) await delFileIfUnused(s.taker_sig_path);
     log('حذف قضية', 'قضية رقم ' + (c.case_number || c.id));
-    await save(); toast('تم حذف القضية'); location.hash = '#/';
+    await save(); toast('تم حذف الحالة'); location.hash = '#/';
   };
   $('#caseBackup').onclick = () => exportCases([c.id]).catch(e => toast('تعذّر الحفظ: ' + e.message, 'error'));
   $('#addParty').onclick = () => partyModal(c, null);
@@ -1055,8 +1054,8 @@ function viewStatementForm(c, st, preParty) {
   const parties = DB.parties.filter(p => p.case_id === c.id);
   if (!parties.length) {
     shell(`<div class="page-head"><h1>محضر <span>سماع أقوال</span></h1></div>
-      <div class="card"><div class="empty"><b>لا توجد أطراف في القضية</b>أضف الطرف أولاً من ملف القضية ثم عد لسماع الأقوال</div>
-      <div style="text-align:center"><a class="btn" href="#/case/${c.id}">العودة لملف القضية</a></div></div>`);
+      <div class="card"><div class="empty"><b>لا توجد أطراف في الحالة</b>أضف الطرف أولاً من ملف الحالة ثم عد لسماع الأقوال</div>
+      <div style="text-align:center"><a class="btn" href="#/case/${c.id}">العودة لملف الحالة</a></div></div>`);
     return;
   }
   const pre = +(preParty || (st && st.party_id) || parties[0].id);
@@ -1065,7 +1064,7 @@ function viewStatementForm(c, st, preParty) {
     text: defaultQuestion(c, byId('parties', pre)) };
   const takerMode = st && st.taker_sig_path ? 'keep' : (st ? 'none' : (S().taker_sig ? 'saved' : 'new'));
   shell(`
-    <div class="page-head"><h1>محضر <span>سماع أقوال</span> — قضية رقم ${esc(c.case_number || c.id)}</h1></div>
+    <div class="page-head"><h1>محضر <span>سماع أقوال</span> — حالة رقم ${esc(c.case_number || c.id)}</h1></div>
     <form id="f">
     <div class="card"><h2>البيانات الإحصائية للطرف</h2>
       <div class="grid g3">
@@ -1136,7 +1135,7 @@ function viewStatementForm(c, st, preParty) {
       <div><label>جهة العمل</label><b>${esc(p.unit || '—')}</b></div>
       <div><label>الجوال</label><b>${esc(p.phone || '—')}</b></div>
       <div class="span-all"><label>العنوان</label><b>${esc(p.address || '—')}</b></div>
-      <div class="span-all hint">لتعديل هذه البيانات: ملف القضية ← الأطراف ← تعديل</div>`;
+      <div class="span-all hint">لتعديل هذه البيانات: ملف الحالة ← الأطراف ← تعديل</div>`;
   };
   // في المحضر الجديد: إذا لم يُعدَّل السؤال الافتراضي، نغيّره حسب صفة الطرف المختار
   let autoQ = st ? null : $('#qa').value;
@@ -1223,7 +1222,7 @@ function printShell(sheetHTML, back, pageRule, info, docTitle) {
       <button class="btn gold" id="doPdf">📄 ملف PDF (بدون رابط)</button>
       <button class="btn" id="doPrint">🖨 طباعة مباشرة</button>
       <a class="btn ghost" href="${back[0]}">${back[1]}</a>
-      <a class="btn ghost" href="${parentHash()}">ملف القضية</a>
+      <a class="btn ghost" href="${parentHash()}">ملف الحالة</a>
       <span class="info" id="pvInfo">${info || ''}</span></div>
     <div class="pv-stage"><div class="pv-scale" id="pvScale">${sheetHTML}</div></div>`;
   const st = document.createElement('style'); st.id = 'pagerule'; st.textContent = pageRule;
@@ -1480,14 +1479,14 @@ function viewLetterForm(c, lt, newType, partyId) {
   const v = lt || letterDefaults(c, newType, partyId);
   const type = v.type, defs = caseDefendants(c), snd = senders();
   shell(`
-    <div class="page-head"><h1>${esc(LETTER_TYPES[type].label)} <span>— قضية رقم ${esc(c.case_number || c.id)}</span></h1>
-      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
+    <div class="page-head"><h1>${esc(LETTER_TYPES[type].label)} <span>— حالة رقم ${esc(c.case_number || c.id)}</span></h1>
+      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للحالة</a></div></div>
     <form id="f">
     <div class="card"><h2>بيانات الخطاب</h2>
       ${type === 'unit' ? `<div class="grid g3" style="margin-bottom:14px">
         <div class="field"><label>المدعى عليه</label><select name="party_id">${defs.length
           ? defs.map(p => `<option value="${p.id}" ${p.id === +v.party_id ? 'selected' : ''}>${esc((p.rank_job ? p.rank_job + ' / ' : '') + p.name)}</option>`).join('')
-          : '<option value="">— لا يوجد مدعى عليه في القضية —</option>'}</select></div>
+          : '<option value="">— لا يوجد مدعى عليه في الحالة —</option>'}</select></div>
         <div class="field"><label>نوع الطلب</label><select name="req">${Object.entries(LETTER_REQS).map(([k, t]) => `<option value="${k}" ${k === v.req ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <div class="field"><label id="detailLbl">تفاصيل الطلب</label><input type="text" name="req_detail" value="${esc(v.req_detail)}"></div>
       </div>` : ''}
@@ -1505,7 +1504,7 @@ function viewLetterForm(c, lt, newType, partyId) {
     </div>
     <div class="card"><h2>المتن <button type="button" class="btn sm ghost count" id="regen">إعادة التوليد</button></h2>
       <textarea name="body" id="body" class="amiri" style="min-height:220px">${esc(v.body)}</textarea>
-      <div class="hint">يُولَّد من بيانات القضية والأطراف ويتحدّث مع اختياراتك أعلاه ما لم تعدّله يدويًا. «نسخ المتن» ينسخ هذا النص فقط.</div>
+      <div class="hint">يُولَّد من بيانات الحالة والأطراف ويتحدّث مع اختياراتك أعلاه ما لم تعدّله يدويًا. «نسخ المتن» ينسخ هذا النص فقط.</div>
     </div>
     <div class="card"><h2>المرسل</h2>
       <div class="sigmodes">${Object.entries(snd).map(([k, x]) => `<label class="sigmode"><input type="radio" name="sender" value="${k}" ${k === v.sender ? 'checked' : ''}>
@@ -1678,8 +1677,8 @@ function viewRecordForm(c, rd, newType, partyId) {
   const v = rd || recordDefaults(c, newType, partyId);
   const type = v.type, ps = DB.parties.filter(p => p.case_id === c.id);
   shell(`
-    <div class="page-head"><h1>${esc(RECORD_TYPES[type].label)} <span>— قضية رقم ${esc(c.case_number || c.id)}</span></h1>
-      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
+    <div class="page-head"><h1>${esc(RECORD_TYPES[type].label)} <span>— حالة رقم ${esc(c.case_number || c.id)}</span></h1>
+      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للحالة</a></div></div>
     <form id="f">
     <div class="card"><h2>بيانات المحضر</h2>
       <div class="grid g3">
@@ -1687,7 +1686,7 @@ function viewRecordForm(c, rd, newType, partyId) {
         ${type !== 'view' ? `<div class="field"><label>${type === 'call' ? 'الطرف الذي جرى الاتصال عليه' : 'الطرف (اختياري)'}</label><select name="party_id">
           ${type === 'open' ? '<option value="">—</option>' : ''}
           ${ps.length || type === 'open' ? ps.map(p => `<option value="${p.id}" ${p.id === +v.party_id ? 'selected' : ''}>${esc(p.party_role)} / ${esc(p.name)}${p.phone ? ' — ' + esc(p.phone) : ''}</option>`).join('')
-            : '<option value="">— أضف الطرف في القضية أولًا —</option>'}</select></div>` : ''}
+            : '<option value="">— أضف الطرف في الحالة أولًا —</option>'}</select></div>` : ''}
         ${type === 'view' ? `<div class="field"><label>مكان المشاهدة</label><input type="text" name="place" value="${esc(v.place)}" placeholder="مثال: موقع الواقعة بحي ... / مقر مركز شرطة ..."></div>` : ''}
         <div class="field"><label>اليوم</label><select name="day">${opts(WEEKDAYS, v.day)}</select></div>
         ${dateField('record_date', 'التاريخ (هـ)', v.record_date)}
@@ -1698,7 +1697,7 @@ function viewRecordForm(c, rd, newType, partyId) {
     </div>
     <div class="card"><h2>نص المحضر <button type="button" class="btn sm ghost count" id="regen">إعادة التوليد</button></h2>
       <textarea name="body" id="body" class="amiri" style="min-height:260px">${esc(v.body)}</textarea>
-      <div class="hint">يبدأ بمقدمة من بيانات القضية (الخطاب الوارد والشكوى وعلى من)، ويتحدّث مع اختياراتك أعلاه ما لم تعدّله يدويًا. ضع ما تريد مكان (      ).</div>
+      <div class="hint">يبدأ بمقدمة من بيانات الحالة (الخطاب الوارد والشكوى وعلى من)، ويتحدّث مع اختياراتك أعلاه ما لم تعدّله يدويًا. ضع ما تريد مكان (      ).</div>
     </div>
     <div class="card"><h2>معد المحضر</h2>
       <div class="grid g2">
@@ -1723,7 +1722,7 @@ function viewRecordForm(c, rd, newType, partyId) {
     const tf = $('#triesF'); if (tf) tf.style.display = r.result === 'waive' ? 'none' : '';
     const ph = $('#phoneHint');
     if (ph) { const p = byId('parties', r.party_id);
-      ph.textContent = p && p.phone ? '' : '⚠ لا يوجد رقم جوال لهذا الطرف — أضفه من «تعديل» في أطراف القضية، أو اكتبه في النص';
+      ph.textContent = p && p.phone ? '' : '⚠ لا يوجد رقم جوال لهذا الطرف — أضفه من «تعديل» في أطراف الحالة، أو اكتبه في النص';
       ph.style.color = 'var(--red)'; }
   };
   $$('select, input', f).forEach(el => { el.addEventListener('change', refresh); el.addEventListener('input', refresh); });
@@ -1754,10 +1753,10 @@ function viewRecordForm(c, rd, newType, partyId) {
 // ---- عرض نص المحضر على الشاشة (بدل معاينة الطباعة) ----
 function docShow(c, title, meta, bodyHTML, footHTML, base) {
   shell(`
-    <div class="page-head"><h1>${esc(title)} <span>— قضية رقم ${esc(c.case_number || c.id)}</span></h1>
+    <div class="page-head"><h1>${esc(title)} <span>— حالة رقم ${esc(c.case_number || c.id)}</span></h1>
       <div class="acts"><a class="btn gold" href="${base}/print">طباعة / PDF</a>
         <a class="btn ghost" href="${base}">تعديل</a>
-        <a class="btn ghost" href="#/case/${c.id}">ملف القضية</a></div></div>
+        <a class="btn ghost" href="#/case/${c.id}">ملف الحالة</a></div></div>
     <div class="card doc-show">
       <div class="doc-meta">${meta.filter(m => m[1]).map(m => `<span><b>${m[0]}</b> ${esc(m[1])}</span>`).join('')}</div>
       <div class="doc-text amiri">${bodyHTML}</div>
@@ -1892,9 +1891,9 @@ function viewReportForm(c) {
     <div class="field"><label>الرتبة</label><input type="text" name="${k}_rank" value="${esc(r[k + '_rank'])}"></div>
     <div class="field"><label>الاسم</label><input type="text" name="${k}_name" value="${esc(r[k + '_name'])}"></div></div>`;
   shell(`
-    <div class="page-head"><h1>تقرير <span>تقييم الإجراءات</span> — قضية رقم ${esc(c.case_number || c.id)}</h1>
-      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للقضية</a></div></div>
-    ${isNew ? '<div class="note">هذه صيغة مبدئية مولّدة من بيانات القضية — لن تُحفظ حتى تضغط «حفظ».</div>' : ''}
+    <div class="page-head"><h1>تقرير <span>تقييم الإجراءات</span> — حالة رقم ${esc(c.case_number || c.id)}</h1>
+      <div class="acts"><a class="btn ghost" href="#/case/${c.id}">العودة للحالة</a></div></div>
+    ${isNew ? '<div class="note">هذه صيغة مبدئية مولّدة من بيانات الحالة — لن تُحفظ حتى تضغط «حفظ».</div>' : ''}
     <form id="f">
     <div class="card"><h2>ترويسة التقرير</h2>
       <div class="grid g4">
@@ -1905,7 +1904,7 @@ function viewReportForm(c) {
       </div></div>
     <div class="card"><h2>الموضوع <button type="button" class="btn sm ghost count" id="regenRef">إعادة التوليد</button></h2>
       <textarea name="ref_text" class="amiri" style="min-height:130px">${esc(r.ref_text)}</textarea>
-      <div class="hint">تُولَّد تلقائيًا من بيانات القضية والأطراف — يمكنك تعديلها بحرية</div></div>
+      <div class="hint">تُولَّد تلقائيًا من بيانات الحالة والأطراف — يمكنك تعديلها بحرية</div></div>
     <div class="card"><h2>الإجراءات المتخذة <button type="button" class="btn sm ghost count" id="regenProc">إعادة التوليد</button></h2>
       <textarea name="procedures_text" class="amiri" style="min-height:130px">${esc(r.procedures_text)}</textarea>
       <div class="hint">تُدرج محاضر سماع الأقوال ومحاضر الإجراءات مرقّمة — أضف أو عدّل ما تحتاجه</div>
@@ -1915,11 +1914,11 @@ function viewReportForm(c) {
         <div id="xprocList"></div>
         <div class="xproc-add"><input type="text" id="xprocNew" placeholder="اكتب إجراءً آخر، مثال: جرى الاطلاع على سجل الموقوفين.">
           <button type="button" class="btn sm" id="xprocAdd">إضافة</button></div>
-        <div class="hint">الإجراء الذي تكتبه يُحفظ في القائمة ليظهر في كل القضايا. اضغط ✕ لحذفه من القائمة.</div></div></div>
+        <div class="hint">الإجراء الذي تكتبه يُحفظ في القائمة ليظهر في كل الحالات. اضغط ✕ لحذفه من القائمة.</div></div></div>
     <div class="card"><h2>صيغة جاهزة للتقييم والمرئيات</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">${(S().report_templates || []).map((t, i) =>
         `<button type="button" class="btn ghost" data-tpl="${i}">${esc(t.name)}</button>`).join('') || '<span class="muted">لا توجد صيغ — أضفها من الإعدادات</span>'}</div>
-      <div class="hint">تملأ «النتيجة» و«المرئيات» بأسماء أطراف هذه القضية، ثم تعدّلها كما تشاء. الصيغ تُعدَّل من «الإعدادات».</div></div>
+      <div class="hint">تملأ «النتيجة» و«المرئيات» بأسماء أطراف هذه الحالة، ثم تعدّلها كما تشاء. الصيغ تُعدَّل من «الإعدادات».</div></div>
     <div class="card"><h2>التقييم</h2>
       <textarea name="result_text" class="amiri" placeholder="بعد الاطلاع على كامل أوراق المعاملة وما تضمنته من إفادات، لم يثبت وجود أي إساءة استخدام للسلطة من قبل رجل الأمن المذكور.">${esc(r.result_text)}</textarea></div>
     <div class="card"><h2>المرئيات</h2>
@@ -2012,8 +2011,8 @@ function viewStats() {
   shell(`
     <div class="page-head"><h1>الإحصائيات <span>والمؤشرات</span></h1></div>
     <div class="kpis">
-      <div class="kpi"><div class="v">${total}</div><div class="l">إجمالي القضايا</div></div>
-      ${byStatus.map(r => `<div class="kpi"><div class="v">${r[1]}</div><div class="l">قضايا ${esc(r[0])}</div></div>`).join('')}
+      <div class="kpi"><div class="v">${total}</div><div class="l">إجمالي الحالات</div></div>
+      ${byStatus.map(r => `<div class="kpi"><div class="v">${r[1]}</div><div class="l">حالات ${esc(r[0])}</div></div>`).join('')}
       <div class="kpi"><div class="v">${DB.statements.length}</div><div class="l">محاضر سماع الأقوال</div></div>
     </div>
     <div class="grid g2">
@@ -2021,7 +2020,7 @@ function viewStats() {
         byResult.map(r => `<tr><td>${esc(r[0])}</td><td><b>${r[1]}</b></td><td><div class="bar"><i style="width:${(r[1] * 100 / total).toFixed(1)}%"></i></div></td></tr>`))}</div>
       <div class="card"><h2>حسب مصدر الأمر</h2>${tbl('<tr class="hd"><th>المصدر</th><th>العدد</th></tr>',
         bySource.map(r => `<tr><td>${esc(r[0] || 'غير محدد')}</td><td><b>${r[1]}</b></td></tr>`))}</div>
-      <div class="card"><h2>القضايا حسب شهر التسجيل</h2>${tbl('<tr class="hd"><th>الشهر (م)</th><th>العدد</th><th style="width:35%"></th></tr>',
+      <div class="card"><h2>الحالات حسب شهر التسجيل</h2>${tbl('<tr class="hd"><th>الشهر (م)</th><th>العدد</th><th style="width:35%"></th></tr>',
         byMonth.map(r => `<tr><td>${esc(r[0])}</td><td><b>${r[1]}</b></td><td><div class="bar"><i style="width:${(r[1] * 100 / mx).toFixed(1)}%"></i></div></td></tr>`))}</div>
       <div class="card"><h2>حسب المحقق المكلف</h2>${tbl('<tr class="hd"><th>المحقق</th><th>الإجمالي</th><th>المنجز</th></tr>',
         [...um.entries()].sort((a, b) => b[1][0] - a[1][0]).map(r => `<tr><td>${esc(r[0])}</td><td><b>${r[1][0]}</b></td><td>${r[1][1]}</td></tr>`))}</div>
@@ -2055,13 +2054,13 @@ async function exportCases(ids) {
   download(new Blob([JSON.stringify(out)], { type: 'application/json' }),
     one ? `قضية-${safeName(String(db.cases[0].case_number || db.cases[0].id))}-${today()}.json` : `قضايا-مختارة-${db.cases.length}-${today()}.json`);
   log('تصدير قضايا', one ? 'قضية رقم ' + (db.cases[0].case_number || db.cases[0].id) : `${db.cases.length} قضية`); save();
-  toast(one ? 'تم حفظ نسخة القضية' : `تم حفظ نسخة من ${db.cases.length} قضية`);
+  toast(one ? 'تم حفظ نسخة الحالة' : `تم حفظ نسخة من ${db.cases.length} حالة`);
 }
 function exportPicker() {
   const rows = DB.cases.slice().sort((a, b) => b.id - a.id);
   const label = c => `${c.case_number || c.id} — ${(DB.parties.find(p => p.case_id === c.id) || {}).name || c.subject || ''}`.slice(0, 80);
-  const m = modal(`<h2>تصدير قضايا محددة</h2>
-    <input type="search" id="pkQ" placeholder="بحث برقم القضية أو الاسم..." style="margin-bottom:10px">
+  const m = modal(`<h2>تصدير حالات محددة</h2>
+    <input type="search" id="pkQ" placeholder="بحث برقم الحالة أو الاسم..." style="margin-bottom:10px">
     <label class="sigmode"><input type="checkbox" id="pkAll"><span><b>تحديد الكل</b></span></label>
     <div id="pkList" style="max-height:50vh; overflow:auto; display:flex; flex-direction:column; gap:6px; margin-top:6px">
       ${rows.map(c => `<label class="sigmode" data-t="${esc(label(c))}"><input type="checkbox" value="${c.id}"><span>${esc(label(c))}</span></label>`).join('')}
@@ -2121,11 +2120,11 @@ async function importBackup(file) {
   const same = (src.cases || []).filter(c => c.uid && DB.cases.some(x => x.uid === c.uid)).length;
   const full = data.kind !== 'cases';
   const m = modal(`<h2>استيراد نسخة</h2>
-    <div style="line-height:1.9">${full ? 'نسخة كاملة' : 'نسخة قضايا'} بتاريخ ${esc(data.exported_at || '—')} — تضم <b>${n}</b> قضية.
+    <div style="line-height:1.9">${full ? 'نسخة كاملة' : 'نسخة حالات'} بتاريخ ${esc(data.exported_at || '—')} — تضم <b>${n}</b> حالة.
       ${same ? `<br>منها <b>${same}</b> موجودة لديك وستُستبدل بنسختها في الملف.` : ''}</div>
     <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px">
-      <button class="btn gold" id="imMerge">إضافة القضايا إلى بياناتي الحالية${same ? ' وتحديث الموجود' : ''}</button>
-      ${full ? `<button class="btn danger" id="imReplace">استبدال كل بياناتي بهذه النسخة (تُحذف ${DB.cases.length} قضية حالية)</button>` : ''}
+      <button class="btn gold" id="imMerge">إضافة الحالات إلى بياناتي الحالية${same ? ' وتحديث الموجود' : ''}</button>
+      ${full ? `<button class="btn danger" id="imReplace">استبدال كل بياناتي بهذه النسخة (تُحذف ${DB.cases.length} حالة موجودة)</button>` : ''}
       <button class="btn ghost" id="imX">إلغاء</button></div>`);
   $('#imX', m).onclick = () => m.remove();
   const putAll = async () => { for (const [p, u] of Object.entries(data.files || {})) await putFile(p, await dataURLToBlob(u)); urlCache.clear(); await loadDocFonts(); };
@@ -2134,7 +2133,7 @@ async function importBackup(file) {
     await putAll();
     const r = mergeCases(src);
     log('استيراد قضايا', `إضافة ${r.added}، تحديث ${r.updated}`); await save();
-    toast(`تم: إضافة ${r.added} قضية${r.updated ? `، وتحديث ${r.updated}` : ''}`); route();
+    toast(`تم: إضافة ${r.added} حالة${r.updated ? `، وتحديث ${r.updated}` : ''}`); route();
   };
   const rp = $('#imReplace', m);
   if (rp) rp.onclick = async () => {
@@ -2150,7 +2149,7 @@ async function importBackup(file) {
 async function moveTo(target) {
   const existing = await target.load().catch(() => null);
   if (existing && existing.cases && existing.cases.length) {
-    if (confirm(`المجلد المختار يحتوي على قاعدة بيانات (${existing.cases.length} قضية).\nموافق = فتح بيانات ذلك المجلد\nإلغاء = تراجع دون تغيير`)) {
+    if (confirm(`المجلد المختار يحتوي على قاعدة بيانات (${existing.cases.length} حالة).\nموافق = فتح بيانات ذلك المجلد\nإلغاء = تراجع دون تغيير`)) {
       await Store.useBackend(target); urlCache.clear(); DB = shapeDB(existing); await loadDocFonts(); toast('تم فتح بيانات المجلد'); route();
     }
     return;
@@ -2185,16 +2184,16 @@ function viewSettings() {
       </div>
       <h2 style="margin-top:20px">النسخ الاحتياطي</h2>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
-        <button class="btn" id="bkExport">نسخة كاملة (كل القضايا)</button>
-        <button class="btn ghost" id="bkPick">نسخة لقضايا محددة</button>
+        <button class="btn" id="bkExport">نسخة كاملة (كل الحالات)</button>
+        <button class="btn ghost" id="bkPick">نسخة لحالات محددة</button>
         <label class="btn ghost" style="margin:0">استيراد نسخة<input type="file" id="bkImport" accept=".json,application/json,text/plain" hidden></label>
       </div>
-      <div class="hint">النسخة ملف واحد يُحفظ في «التنزيلات» على جهازك، ويضم القضايا بأطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها. «النسخة الكاملة» تضم الإعدادات أيضًا. عند الاستيراد تختار: إضافة القضايا إلى بياناتك (والقضية الموجودة تُحدَّث)، أو استبدال كل البيانات. ولحفظ قضية واحدة: افتح ملفها واضغط «حفظ نسخة من هذه القضية».</div>
+      <div class="hint">النسخة ملف واحد يُحفظ في «التنزيلات» على جهازك، ويضم الحالات بأطرافها ومحاضرها وتواقيعها ومرفقاتها وتقاريرها وخطاباتها. «النسخة الكاملة» تضم الإعدادات أيضًا. عند الاستيراد تختار: إضافة الحالات إلى بياناتك (والحالة الموجودة تُحدَّث)، أو استبدال كل البيانات. ولحفظ حالة واحدة: افتح ملفها واضغط «حفظ نسخة من هذه الحالة».</div>
     </div>
 
     ${fontsCardHTML()}
 
-    <div class="card"><h2>طريقة عرض ملف القضية</h2>
+    <div class="card"><h2>طريقة عرض ملف الحالة</h2>
       <div class="sigmodes">
         <label class="sigmode"><input type="radio" name="caseView" value="long" ${lsGet('caseView', 'long') !== 'tabs' ? 'checked' : ''}>
           <span><b>صفحة طولية</b><br><span class="muted">كل الأقسام تحت بعضها في صفحة واحدة، والضغط على التبويب ينقلك إلى قسمه</span></span></label>
@@ -2217,7 +2216,7 @@ function viewSettings() {
         <div class="hint">صورة PNG بخلفية شفافة تظهر في الترويسة والتقارير. تُحفظ مع بياناتك ولا تُرفع للإنترنت.</div></div>
     </div>
 
-    <div class="card"><h2>القيم الافتراضية للقضايا والمحاضر</h2>
+    <div class="card"><h2>القيم الافتراضية للحالات والمحاضر</h2>
       <div class="grid g2">
         <div class="field"><label>مصدر الأمر الافتراضي</label><input type="text" name="def_order_source" value="${esc(s.def_order_source)}"></div>
         <div class="field"><label>مكان سماع الأقوال الافتراضي</label><input type="text" name="def_location" value="${esc(s.def_location)}"></div>
@@ -2328,9 +2327,9 @@ function viewSettings() {
     await delFileIfUnused(prev);
     log('حذف توقيع المحقق'); await save(); route();
   };
-  $$('[name=caseView]').forEach(r => r.onchange = () => { lsSet('caseView', r.value); toast(r.value === 'tabs' ? 'ملف القضية: تبويبات' : 'ملف القضية: صفحة طولية'); });
+  $$('[name=caseView]').forEach(r => r.onchange = () => { lsSet('caseView', r.value); toast(r.value === 'tabs' ? 'ملف الحالة: تبويبات' : 'ملف الحالة: صفحة طولية'); });
   $('#bkExport').onclick =() => exportBackup().catch(e => toast('تعذّر التصدير: ' + e.message, 'error'));
-  $('#bkPick').onclick = () => DB.cases.length ? exportPicker() : toast('لا توجد قضايا', 'error');
+  $('#bkPick').onclick = () => DB.cases.length ? exportPicker() : toast('لا توجد حالات', 'error');
   $('#bkImport').onchange = e => { const fl = e.target.files[0]; if (fl) importBackup(fl).catch(err => toast('تعذّر الاستيراد: ' + err.message, 'error')); };
   const mf = $('#mvFolder');
   if (mf) mf.onclick = async () => {
